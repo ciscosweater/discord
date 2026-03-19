@@ -36,6 +36,7 @@
 	let soundId = "";
 	let guildId = "";
 	let soundName = "";
+	let emojiName = "";
 	let guilds: GuildInfo[] = [];
 	let loadingGuilds = false;
 	let guildsError: string | null = null;
@@ -52,6 +53,9 @@
 		}
 		if ($actionSettings.sound_name !== undefined) {
 			soundName = $actionSettings.sound_name;
+		}
+		if ($actionSettings.emoji_name !== undefined) {
+			emojiName = $actionSettings.emoji_name;
 		}
 	}
 
@@ -99,12 +103,14 @@
 			sound_id: soundId,
 			guild_id: guildId,
 			sound_name: soundName,
+			emoji_name: emojiName,
 		});
 	}
 
 	function handleGuildChange() {
 		soundId = "";
 		soundName = "";
+		emojiName = "";
 		saveSettings();
 	}
 </script>
@@ -169,6 +175,7 @@
 			{soundRefreshToken}
 			bind:selectedSoundId={soundId}
 			bind:selectedSoundName={soundName}
+			bind:selectedEmojiName={emojiName}
 		/>
 	</div>
 
@@ -213,11 +220,23 @@
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
 			/>
 		</div>
+
+		<div class="mb-3">
+			<label for="emojiName" class="mb-1 block text-xs text-neutral-200">Emoji</label>
+			<input
+				id="emojiName"
+				type="text"
+				bind:value={emojiName}
+				on:change={saveSettings}
+				placeholder="Emoji shown on the button"
+				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
+			/>
+		</div>
 	</div>
 
 	{#if soundName}
 		<div class="rounded-lg border border-green-600 bg-green-900/30 p-2 text-xs text-green-400">
-			Selected: {soundName}
+			Selected: {emojiName ? `${emojiName} ` : ""}{soundName}
 		</div>
 	{/if}
 </div>

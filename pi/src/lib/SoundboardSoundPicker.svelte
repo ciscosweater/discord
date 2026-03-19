@@ -37,6 +37,7 @@
 	export let soundRefreshToken: number = 0;
 	export let selectedSoundId: string = "";
 	export let selectedSoundName: string = "";
+	export let selectedEmojiName: string = "";
 
 	let sounds: SoundInfo[] = [];
 	let loading = false;
@@ -62,12 +63,14 @@
 			if (selectedSoundId && !sounds.some((sound) => sound.sound_id === selectedSoundId)) {
 				selectedSoundId = "";
 				selectedSoundName = "";
+				selectedEmojiName = "";
 			}
 
 			if (!selectedSoundName && selectedSoundId) {
 				const selected = sounds.find((sound) => sound.sound_id === selectedSoundId);
 				if (selected) {
 					selectedSoundName = selected.name;
+					selectedEmojiName = selected.emoji_name ?? "";
 				}
 			}
 		}
@@ -142,8 +145,10 @@
 		const selected = sounds.find((s) => s.sound_id === selectedSoundId);
 		if (selected) {
 			selectedSoundName = selected.name;
+			selectedEmojiName = selected.emoji_name ?? "";
 		} else {
 			selectedSoundName = "";
+			selectedEmojiName = "";
 		}
 
 		// Save settings when a sound is selected
@@ -151,6 +156,7 @@
 			sound_id: selectedSoundId,
 			guild_id: requestedGuildId || guildId.trim(),
 			sound_name: selectedSoundName,
+			emoji_name: selectedEmojiName,
 		});
 	}
 

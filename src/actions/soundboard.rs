@@ -2,6 +2,10 @@ use crate::client::discord_client;
 use crate::rpc_events::{available_soundboard_guilds, guild_request_error, soundboard_request_error, soundboard_sounds};
 
 use std::collections::HashMap;
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+use std::process::Command;
 
 use discord_ipc_rust::models::send::commands::{GetSoundboardSoundsArgs, SentCommand};
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
@@ -15,6 +19,7 @@ struct SoundboardPayload {
 	sound_id: Option<String>,
 	guild_id: Option<String>,
 	sound_name: Option<String>,
+	emoji_name: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -156,11 +161,149 @@ async fn wait_for_sounds(instance: &Instance, guild_id: &str) -> OpenActionResul
 	.await
 }
 
+fn escape_xml_text(input: &str) -> String {
+	let mut escaped = String::with_capacity(input.len());
+	for ch in input.chars() {
+		match ch {
+			'&' => escaped.push_str("&amp;"),
+			'<' => escaped.push_str("&lt;"),
+			'>' => escaped.push_str("&gt;"),
+			'"' => escaped.push_str("&quot;"),
+			'\'' => escaped.push_str("&apos;"),
+			_ => escaped.push(ch),
+		}
+	}
+	escaped
+}
+
+fn escape_pango_text(input: &str) -> String {
+	escape_xml_text(input)
+}
+
+fn plugin_actions_dir() -> Option<PathBuf> {
+	let exe_path = std::env::current_exe().ok()?;
+	let exe_dir = exe_path.parent()?.to_path_buf();
+	Some(exe_dir.join("actions"))
+}
+
+fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
+	let trimmed_emoji = emoji_name.map(str::trim).filter(|emoji| !emoji.is_empty());
+	if let Some(emoji) = trimmed_emoji {
+		let actions_dir = plugin_actions_dir()?;
+		let generated_dir = actions_dir.join("generated");
+		if let Err(error) = fs::create_dir_all(&generated_dir) {
+			log::error!("Failed to create generated dir {}: {}", generated_dir.display(), error);
+			return None;
+		}
+
+		let mut hasher = std::collections::hash_map::DefaultHasher::new();
+		emoji.hash(&mut hasher);
+		let hash = hasher.finish();
+		let filename = format!("soundboard_{hash:016x}.png");
+		let output_path = generated_dir.join(&filename);
+		let temp_emoji_path = generated_dir.join(format!("soundboard_{hash:016x}_emoji.png"));
+		let blank_svg_path = actions_dir.join("blank.svg");
+		let pango_markup = format!(
+			r#"<span font="Noto Color Emoji 70">{}</span>"#,
+			escape_pango_text(emoji)
+		);
+
+		let emoji_render = Command::new("convert")
+			.arg("-background")
+			.arg("none")
+			.arg(format!("pango:{pango_markup}"))
+			.arg("-trim")
+			.arg("+repage")
+			.arg(&temp_emoji_path)
+			.output();
+		match emoji_render {
+			Ok(output) if output.status.success() => {}
+			Ok(output) => {
+				log::error!(
+					"Failed to render emoji png for {:?}: status={} stderr={}",
+					emoji,
+					output.status,
+					String::from_utf8_lossy(&output.stderr)
+				);
+				return None;
+			}
+			Err(error) => {
+				log::error!("Failed to start convert for emoji render: {}", error);
+				return None;
+			}
+		}
+
+		let compose = Command::new("convert")
+			.arg(&blank_svg_path)
+			.arg(&temp_emoji_path)
+			.arg("-gravity")
+			.arg("center")
+			.arg("-geometry")
+			.arg("+0-2")
+			.arg("-composite")
+			.arg(&output_path)
+			.output();
+		match compose {
+			Ok(output) if output.status.success() => {}
+			Ok(output) => {
+				log::error!(
+					"Failed to compose png {}: status={} stderr={}",
+					output_path.display(),
+					output.status,
+					String::from_utf8_lossy(&output.stderr)
+				);
+				let _ = fs::remove_file(&temp_emoji_path);
+				return None;
+			}
+			Err(error) => {
+				log::error!("Failed to start convert for composition: {}", error);
+				let _ = fs::remove_file(&temp_emoji_path);
+				return None;
+			}
+		}
+
+		let _ = fs::remove_file(&temp_emoji_path);
+		if !output_path.exists() {
+			log::error!("Expected composed png not found after convert: {}", output_path.display());
+			return None;
+		}
+
+		let image_path = format!("actions/generated/{}", filename.trim_end_matches(".png"));
+		Some(image_path)
+	} else {
+		Some("actions/blank".to_string())
+	}
+}
+
+async fn update_soundboard_button(instance: &Instance, settings: &HashMap<String, String>) -> OpenActionResult<()> {
+	let image = write_soundboard_image(settings.get("emoji_name").map(String::as_str))
+		.unwrap_or_else(|| "actions/blank".to_string());
+	instance.set_image(Some(image), None).await?;
+	instance.set_title(None::<String>, None).await?;
+	Ok(())
+}
+
 pub struct PlaySoundboardSoundAction;
 #[async_trait]
 impl Action for PlaySoundboardSoundAction {
 	const UUID: ActionUuid = "com.elgato.discord.soundboard";
 	type Settings = HashMap<String, String>;
+
+	async fn will_appear(
+		&self,
+		instance: &Instance,
+		settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		update_soundboard_button(instance, settings).await
+	}
+
+	async fn did_receive_settings(
+		&self,
+		instance: &Instance,
+		settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		update_soundboard_button(instance, settings).await
+	}
 
 	async fn property_inspector_did_appear(
 		&self,
@@ -313,9 +456,13 @@ impl Action for PlaySoundboardSoundAction {
 		if let Some(sound_name) = payload.sound_name {
 			new_settings.insert("sound_name".to_string(), sound_name);
 		}
+		if let Some(emoji_name) = payload.emoji_name {
+			new_settings.insert("emoji_name".to_string(), emoji_name);
+		}
 
 		if !new_settings.is_empty() {
 			instance.set_settings(&new_settings).await?;
+			update_soundboard_button(instance, &new_settings).await?;
 		}
 
 		Ok(())
