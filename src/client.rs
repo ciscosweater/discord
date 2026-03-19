@@ -42,9 +42,11 @@ fn reconnecting_flag() -> &'static AtomicBool {
 // Attempts to reinitialize the Discord IPC client using the stored settings.
 async fn reinitialize() {
 	let settings = current_settings().read().await.clone();
-	log::info!("reinitialize: client_id present={} client_secret present={}",
+	log::info!(
+		"reinitialize: client_id present={} client_secret present={}",
 		!settings.client_id.is_empty(),
-		!settings.client_secret.is_empty());
+		!settings.client_secret.is_empty()
+	);
 	match create_discord_client(&settings).await {
 		Ok(client) => {
 			*discord_client().write().await = Some(client);
@@ -204,7 +206,7 @@ async fn create_discord_client(settings: &DiscordSettings) -> Result<DiscordIpcC
 
 		rpc.emit_command(&SentCommand::Authorize(AuthorizeArgs {
 			client_id: settings.client_id.clone(),
-			scopes: vec!["rpc".to_owned(), "identify".to_owned()],
+			scopes: vec!["rpc".to_owned(), "identify".to_owned(), "guilds".to_owned()],
 			rpc_token: None,
 			username: None,
 		}))

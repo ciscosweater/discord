@@ -14,6 +14,25 @@
 		error?: string;
 	}
 
+	function parseSoundsResponse(detail: unknown): SoundsResponse | null {
+		const candidate =
+			detail && typeof detail === "object" && "payload" in detail
+				? (detail as { payload: unknown }).payload
+				: detail;
+
+		if (typeof candidate === "string") {
+			try {
+				return JSON.parse(candidate) as SoundsResponse;
+			} catch {
+				return null;
+			}
+		}
+		if (candidate && typeof candidate === "object") {
+			return candidate as SoundsResponse;
+		}
+		return null;
+	}
+
 	export let guildId: string = "";
 	export let selectedSoundId: string = "";
 	export let selectedSoundName: string = "";
@@ -24,6 +43,7 @@
 	let listener: ((event: Event) => void) | null = null;
 	let requestedGuildId = "";
 	let initialized = false;
+	let soundRequestToken = 0;
 
 	function handleResponse(data: SoundsResponse) {
 		if (data.action === "sounds_result") {
@@ -52,7 +72,7 @@
 	}
 
 	function handleEvent(event: Event) {
-		const detail = (event as CustomEvent<SoundsResponse>).detail;
+		const detail = parseSoundsResponse((event as CustomEvent<unknown>).detail);
 		if (detail?.action === "sounds_result") {
 			handleResponse(detail);
 		}
@@ -95,6 +115,7 @@
 			return;
 		}
 
+		const requestToken = ++soundRequestToken;
 		requestedGuildId = normalizedGuildId;
 		loading = true;
 		sounds = [];
@@ -103,6 +124,12 @@
 			action: "get_sounds",
 			guild_id: normalizedGuildId,
 		});
+		window.setTimeout(() => {
+			if (requestToken === soundRequestToken && loading) {
+				loading = false;
+				error = "Loading sounds timed out. Check plugin logs or use Manual Entry below.";
+			}
+		}, 16000);
 	}
 
 	function handleSoundSelect() {

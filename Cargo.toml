@@ -12,3 +12,6 @@ log = "0.4"
 simplelog = "0.12"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1.18", features = ["v4"] }
+
+[patch."https://github.com/ciscosweater/discord-ipc-rust.git"]
+discord-ipc-rust = { path = "discord-ipc-rust" }
