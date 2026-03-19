@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 use serde_json::json;
+use uuid::Uuid;
 
 #[derive(Debug, serde::Deserialize)]
 struct SoundboardPayload {
@@ -27,13 +28,16 @@ impl Action for PlaySoundboardSoundAction {
 		};
 
 		let sound_id = settings.get("sound_id").cloned();
-		let guild_id = settings
-			.get("guild_id")
-			.cloned()
-			.unwrap_or_else(|| "DEFAULT".to_string());
+		let guild_id = settings.get("guild_id").cloned();
 
 		let Some(sound_id) = sound_id else {
 			log::error!("No sound_id provided in settings");
+			instance.show_alert().await?;
+			return Ok(());
+		};
+
+		let Some(guild_id) = guild_id else {
+			log::error!("No guild_id provided in settings");
 			instance.show_alert().await?;
 			return Ok(());
 		};
@@ -42,10 +46,14 @@ impl Action for PlaySoundboardSoundAction {
 			"sound_id": sound_id,
 			"guild_id": guild_id
 		});
+		let nonce = Uuid::new_v4().to_string();
 		let payload = json!({
 			"cmd": "PLAY_SOUNDBOARD_SOUND",
-			"args": args
+			"args": args,
+			"nonce": nonce
 		});
+
+		log::debug!("Soundboard payload being sent: {}", payload);
 
 		match client.emit_string(&payload.to_string()).await {
 			Ok(_) => instance.show_ok().await,

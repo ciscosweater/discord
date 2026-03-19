@@ -39,7 +39,7 @@
 			type="text"
 			bind:value={guildId}
 			on:change={saveSettings}
-			placeholder="Server ID (or DEFAULT for standard sounds)"
+			placeholder="Server ID (snowflake)"
 			class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
 		/>
 	</div>

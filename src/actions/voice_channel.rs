@@ -53,6 +53,7 @@ impl Action for SelectVoiceChannelAction {
 			)
 			.await
 		} else {
+			log::debug!("SelectVoiceChannel settings received: {:?}", settings);
 			log::error!("No channel_id provided in settings");
 			instance.show_alert().await?;
 			Ok(())

@@ -77,7 +77,7 @@
       "Icon": "actions/join_0",
       "Tooltip": "Join a voice channel",
       "Controllers": ["Keypad"],
-      "PropertyInspectorPath": "pi/simple.html",
+      "PropertyInspectorPath": "pi/voicechannel.html",
       "DisableAutomaticStates": true,
       "States": [{ "Image": "actions/join_0" }]
     },
@@ -87,7 +87,7 @@
       "Icon": "actions/leave_0",
       "Tooltip": "Leave the current voice channel",
       "Controllers": ["Keypad"],
-      "PropertyInspectorPath": "pi/simple.html",
+      "PropertyInspectorPath": "pi/voicechannel.html",
       "DisableAutomaticStates": true,
       "States": [{ "Image": "actions/leave_0" }]
     },

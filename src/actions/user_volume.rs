@@ -48,6 +48,8 @@ impl Action for UserVolumeControlButtonAction {
 	type Settings = HashMap<String, String>;
 
 	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		log::debug!("UserVolumeControlButton settings: {:?}", settings);
+
 		let user_id = settings.get("user_id").cloned();
 		let mode = settings.get("mode").cloned().unwrap_or_else(|| "mute".to_string());
 		let mute_type = settings
@@ -60,6 +62,8 @@ impl Action for UserVolumeControlButtonAction {
 			instance.show_alert().await?;
 			return Ok(());
 		};
+
+		log::debug!("UserVolumeControlButton: user_id={}, mode={}, mute_type={}", user_id, mode, mute_type);
 
 		match mode.as_str() {
 			"mute" => {
@@ -168,6 +172,8 @@ impl Action for UserVolumeControlDialAction {
 	type Settings = HashMap<String, String>;
 
 	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		log::debug!("UserVolumeControlDial settings: {:?}", settings);
+
 		let user_id = settings.get("user_id").cloned();
 		let mode = settings.get("mode").cloned().unwrap_or_else(|| "adjust".to_string());
 
@@ -176,6 +182,8 @@ impl Action for UserVolumeControlDialAction {
 			instance.show_alert().await?;
 			return Ok(());
 		};
+
+		log::debug!("UserVolumeControlDial: user_id={}, mode={}", user_id, mode);
 
 		match mode.as_str() {
 			"adjust" => {

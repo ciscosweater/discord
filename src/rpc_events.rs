@@ -16,6 +16,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 					error.code,
 					error.message
 				);
+				log::debug!("Full error event data: {:?}", error);
 				if error.code == 4006 {
 					let mut current = current_settings().write().await;
 					current.access_token.clear();

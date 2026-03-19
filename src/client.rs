@@ -96,15 +96,8 @@ async fn setup_discord_client(
 	.await
 	.map_err(|e| format!("Failed to subscribe to voice updates: {}", e))?;
 
-	rpc.emit_command(&SentCommand::Subscribe(
-		SubscribeableEvent::VoiceStateUpdate {
-			channel_id: String::new(),
-		},
-	))
-	.await
-	.map_err(|e| format!("Failed to subscribe to voice state updates: {}", e))?;
-
 	// Request current voice settings so buttons reflect the initial state immediately.
+	log::debug!("Requesting GetVoiceSettings");
 	rpc.emit_command(&SentCommand::GetVoiceSettings)
 		.await
 		.map_err(|e| format!("Failed to fetch initial voice settings: {}", e))?;
