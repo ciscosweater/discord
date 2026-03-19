@@ -349,7 +349,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				apply_voice_state(voice.mute, voice.deaf).await
 			}
 			ReturnedEvent::VoiceChannelSelect(data) => {
-				sync_voice_channel_subscriptions(Some(data.channel_id)).await;
+				sync_voice_channel_subscriptions(data.channel_id).await;
 			}
 			ReturnedEvent::VoiceStateCreate(voice) | ReturnedEvent::VoiceStateUpdate(voice) => {
 				upsert_voice_participant(voice).await;
