@@ -33,10 +33,14 @@
 		return null;
 	}
 
-	let soundId = "";
-	let guildId = "";
-	let soundName = "";
-	let emojiName = "";
+	let savedSoundId = "";
+	let savedGuildId = "";
+	let savedSoundName = "";
+	let savedEmojiName = "";
+	let draftGuildId = "";
+	let draftSoundId = "";
+	let draftSoundName = "";
+	let draftEmojiName = "";
 	let guilds: GuildInfo[] = [];
 	let loadingGuilds = false;
 	let guildsError: string | null = null;
@@ -45,17 +49,25 @@
 	let soundRefreshToken = 0;
 
 	$: {
-		if ($actionSettings.sound_id !== undefined) {
-			soundId = $actionSettings.sound_id;
-		}
-		if ($actionSettings.guild_id !== undefined) {
-			guildId = $actionSettings.guild_id;
-		}
-		if ($actionSettings.sound_name !== undefined) {
-			soundName = $actionSettings.sound_name;
-		}
-		if ($actionSettings.emoji_name !== undefined) {
-			emojiName = $actionSettings.emoji_name;
+		const nextSavedSoundId = $actionSettings.sound_id ?? "";
+		const nextSavedGuildId = $actionSettings.guild_id ?? "";
+		const nextSavedSoundName = $actionSettings.sound_name ?? "";
+		const nextSavedEmojiName = $actionSettings.emoji_name ?? "";
+		const changed =
+			nextSavedSoundId !== savedSoundId ||
+			nextSavedGuildId !== savedGuildId ||
+			nextSavedSoundName !== savedSoundName ||
+			nextSavedEmojiName !== savedEmojiName;
+
+		if (changed) {
+			savedSoundId = nextSavedSoundId;
+			savedGuildId = nextSavedGuildId;
+			savedSoundName = nextSavedSoundName;
+			savedEmojiName = nextSavedEmojiName;
+			draftGuildId = nextSavedGuildId;
+			draftSoundId = nextSavedSoundId;
+			draftSoundName = nextSavedSoundName;
+			draftEmojiName = nextSavedEmojiName;
 		}
 	}
 
@@ -68,7 +80,7 @@
 		guilds = detail.guilds ?? [];
 		loadingGuilds = false;
 		guildsError = detail.error ?? null;
-		if (!detail.error && guildId.trim()) {
+		if (!detail.error && draftGuildId.trim()) {
 			soundRefreshToken += 1;
 		}
 	}
@@ -100,17 +112,28 @@
 
 	function saveSettings() {
 		sendToPlugin({
-			sound_id: soundId,
-			guild_id: guildId,
-			sound_name: soundName,
-			emoji_name: emojiName,
+			sound_id: savedSoundId,
+			guild_id: savedGuildId,
+			sound_name: savedSoundName,
+			emoji_name: savedEmojiName,
 		});
 	}
 
 	function handleGuildChange() {
-		soundId = "";
-		soundName = "";
-		emojiName = "";
+		draftSoundId = "";
+		draftSoundName = "";
+		draftEmojiName = "";
+	}
+
+	function handleDraftSelectionChange() {
+		if (!draftGuildId.trim() || !draftSoundId.trim()) {
+			return;
+		}
+
+		savedGuildId = draftGuildId;
+		savedSoundId = draftSoundId;
+		savedSoundName = draftSoundName;
+		savedEmojiName = draftEmojiName;
 		saveSettings();
 	}
 </script>
@@ -145,7 +168,7 @@
 			</div>
 			<select
 				id="guildIdPicker"
-				bind:value={guildId}
+				bind:value={draftGuildId}
 				on:change={handleGuildChange}
 				disabled={loadingGuilds || guilds.length === 0}
 				class="w-full appearance-none rounded-lg border border-neutral-600 px-2 py-1 text-xs focus:border-neutral-600 focus:outline-none"
@@ -171,13 +194,20 @@
 		</div>
 
 		<SoundboardSoundPicker
-			{guildId}
+			guildId={draftGuildId}
 			{soundRefreshToken}
-			bind:selectedSoundId={soundId}
-			bind:selectedSoundName={soundName}
-			bind:selectedEmojiName={emojiName}
+			bind:selectedSoundId={draftSoundId}
+			bind:selectedSoundName={draftSoundName}
+			bind:selectedEmojiName={draftEmojiName}
+			onSelectionChange={handleDraftSelectionChange}
 		/>
 	</div>
+
+	{#if draftGuildId && draftGuildId !== savedGuildId}
+		<div class="mb-4 rounded-lg border border-amber-700 bg-amber-950/30 p-2 text-xs text-amber-300">
+			You are browsing sounds from another server. This button keeps its current assignment until you select a new sound.
+		</div>
+	{/if}
 
 	<div class="mb-4 border-t border-neutral-700 pt-4">
 		<h4 class="mb-2 text-xs font-semibold text-neutral-300">Manual Entry (Advanced)</h4>
@@ -190,7 +220,7 @@
 			<input
 				id="soundId"
 				type="text"
-				bind:value={soundId}
+				bind:value={savedSoundId}
 				on:change={saveSettings}
 				placeholder="Discord sound ID (snowflake)"
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
@@ -202,7 +232,7 @@
 			<input
 				id="guildId"
 				type="text"
-				bind:value={guildId}
+				bind:value={savedGuildId}
 				on:change={saveSettings}
 				placeholder="Server ID (snowflake)"
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
@@ -214,7 +244,7 @@
 			<input
 				id="soundName"
 				type="text"
-				bind:value={soundName}
+				bind:value={savedSoundName}
 				on:change={saveSettings}
 				placeholder="Display name for the sound"
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
@@ -226,7 +256,7 @@
 			<input
 				id="emojiName"
 				type="text"
-				bind:value={emojiName}
+				bind:value={savedEmojiName}
 				on:change={saveSettings}
 				placeholder="Emoji shown on the button"
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
@@ -234,9 +264,9 @@
 		</div>
 	</div>
 
-	{#if soundName}
+	{#if savedSoundName}
 		<div class="rounded-lg border border-green-600 bg-green-900/30 p-2 text-xs text-green-400">
-			Selected: {emojiName ? `${emojiName} ` : ""}{soundName}
+			Selected: {savedEmojiName ? `${savedEmojiName} ` : ""}{savedSoundName}
 		</div>
 	{/if}
 </div>

@@ -150,7 +150,7 @@ async fn create_discord_client(settings: &DiscordSettings) -> Result<DiscordIpcC
 
 		rpc.setup_event_handler(move |item| {
 			let code = match &item {
-				ReceivedItem::Command(command) => match &**command {
+				ReceivedItem::Command(command) => match &command.command {
 					ReturnedCommand::Authorize { code } => Some(code.clone()),
 					_ => None,
 				},

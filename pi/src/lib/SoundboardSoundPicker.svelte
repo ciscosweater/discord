@@ -10,6 +10,7 @@
 
 	interface SoundsResponse {
 		action: string;
+		guild_id: string;
 		sounds: SoundInfo[];
 		error?: string;
 	}
@@ -38,6 +39,7 @@
 	export let selectedSoundId: string = "";
 	export let selectedSoundName: string = "";
 	export let selectedEmojiName: string = "";
+	export let onSelectionChange: (() => void) | undefined = undefined;
 
 	let sounds: SoundInfo[] = [];
 	let loading = false;
@@ -50,6 +52,10 @@
 
 	function handleResponse(data: SoundsResponse) {
 		if (data.action === "sounds_result") {
+			if (data.guild_id !== guildId.trim()) {
+				return;
+			}
+
 			sounds = data.sounds;
 			loading = false;
 			if (data.error) {
@@ -58,18 +64,6 @@
 				error = "No soundboard sounds found for this server";
 			} else {
 				error = null;
-			}
-
-			if (selectedSoundId && !sounds.some((sound) => sound.sound_id === selectedSoundId)) {
-				selectedSoundId = "";
-				selectedSoundName = "";
-				selectedEmojiName = "";
-				sendToPlugin({
-					sound_id: "",
-					guild_id: requestedGuildId || guildId.trim(),
-					sound_name: "",
-					emoji_name: "",
-				});
 			}
 
 			if (!selectedSoundName && selectedSoundId) {
@@ -157,13 +151,7 @@
 			selectedEmojiName = "";
 		}
 
-		// Save settings when a sound is selected
-		sendToPlugin({
-			sound_id: selectedSoundId,
-			guild_id: requestedGuildId || guildId.trim(),
-			sound_name: selectedSoundName,
-			emoji_name: selectedEmojiName,
-		});
+		onSelectionChange?.();
 	}
 
 	function handleRefresh() {

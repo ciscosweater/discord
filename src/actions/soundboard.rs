@@ -1,6 +1,7 @@
 use crate::client::discord_client;
 use crate::rpc_events::{
-	available_soundboard_guilds, guild_request_error, soundboard_request_error, soundboard_sounds,
+	available_soundboard_guilds, guild_request_error, register_pending_soundboard_request,
+	soundboard_request_error, soundboard_sounds,
 };
 
 use std::collections::HashMap;
@@ -8,10 +9,12 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use discord_ipc_rust::models::send::commands::{GetSoundboardSoundsArgs, SentCommand};
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 use serde_json::json;
+use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
@@ -35,6 +38,7 @@ pub(crate) struct SoundInfo {
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct SoundsResponse {
 	pub(crate) action: String,
+	pub(crate) guild_id: String,
 	pub(crate) sounds: Vec<SoundInfo>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(crate) error: Option<String>,
@@ -66,27 +70,68 @@ async fn request_guilds() -> Result<(), String> {
 		.map_err(|error| format!("Failed to request guild list: {}", error))
 }
 
-async fn request_soundboard_sounds_for_guild(guild_id: &str) -> Result<(), String> {
+fn soundboard_instance_settings() -> &'static RwLock<HashMap<String, HashMap<String, String>>> {
+	static SETTINGS: OnceLock<RwLock<HashMap<String, HashMap<String, String>>>> = OnceLock::new();
+	SETTINGS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+async fn remember_instance_settings(instance: &Instance, settings: &HashMap<String, String>) {
+	soundboard_instance_settings()
+		.write()
+		.await
+		.insert(instance.instance_id.clone(), settings.clone());
+}
+
+async fn merge_instance_settings(
+	instance: &Instance,
+	settings: &HashMap<String, String>,
+) -> HashMap<String, String> {
+	let mut registry = soundboard_instance_settings().write().await;
+	let merged = registry.entry(instance.instance_id.clone()).or_default();
+	for (key, value) in settings {
+		merged.insert(key.clone(), value.clone());
+	}
+	merged.clone()
+}
+
+async fn forget_instance_settings(instance: &Instance) {
+	soundboard_instance_settings()
+		.write()
+		.await
+		.remove(&instance.instance_id);
+}
+
+async fn request_soundboard_sounds_for_guild(
+	instance: &Instance,
+	guild_id: &str,
+) -> Result<(), String> {
 	let mut client_lock = discord_client().write().await;
 	let Some(client) = client_lock.as_mut() else {
 		return Err("Discord client not initialized".to_string());
 	};
 
-	client
-		.emit_command(&SentCommand::GetSoundboardSounds(GetSoundboardSoundsArgs {
+	*soundboard_request_error().write().await = None;
+	let nonce = client
+		.emit_command_with_nonce(&SentCommand::GetSoundboardSounds(GetSoundboardSoundsArgs {
 			guild_id: guild_id.to_string(),
 		}))
 		.await
-		.map_err(|error| format!("Failed to request soundboard sounds: {}", error))
+		.map_err(|error| format!("Failed to request soundboard sounds: {}", error))?;
+	drop(client_lock);
+
+	register_pending_soundboard_request(&nonce, &instance.instance_id, guild_id).await;
+	Ok(())
 }
 
 async fn send_sounds_response(
 	instance: &Instance,
+	guild_id: &str,
 	sounds: Vec<SoundInfo>,
 	error: Option<String>,
 ) -> OpenActionResult<()> {
 	let response = SoundsResponse {
 		action: "sounds_result".to_string(),
+		guild_id: guild_id.to_string(),
 		sounds,
 		error,
 	};
@@ -150,12 +195,12 @@ async fn wait_for_sounds(instance: &Instance, guild_id: &str) -> OpenActionResul
 				})
 				.collect();
 			drop(sounds_map);
-			return send_sounds_response(instance, sounds, None).await;
+			return send_sounds_response(instance, guild_id, sounds, None).await;
 		}
 		drop(sounds_map);
 
 		if let Some(error) = soundboard_request_error().read().await.clone() {
-			return send_sounds_response(instance, vec![], Some(error)).await;
+			return send_sounds_response(instance, guild_id, vec![], Some(error)).await;
 		}
 
 		sleep(Duration::from_millis(250)).await;
@@ -163,6 +208,7 @@ async fn wait_for_sounds(instance: &Instance, guild_id: &str) -> OpenActionResul
 
 	send_sounds_response(
 		instance,
+		guild_id,
 		vec![],
 		Some("Timed out waiting for soundboard sounds from Discord RPC.".to_string()),
 	)
@@ -322,7 +368,17 @@ impl Action for PlaySoundboardSoundAction {
 		instance: &Instance,
 		settings: &Self::Settings,
 	) -> OpenActionResult<()> {
+		remember_instance_settings(instance, settings).await;
 		update_soundboard_button(instance, settings).await
+	}
+
+	async fn will_disappear(
+		&self,
+		instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		forget_instance_settings(instance).await;
+		Ok(())
 	}
 
 	async fn did_receive_settings(
@@ -330,6 +386,7 @@ impl Action for PlaySoundboardSoundAction {
 		instance: &Instance,
 		settings: &Self::Settings,
 	) -> OpenActionResult<()> {
+		remember_instance_settings(instance, settings).await;
 		update_soundboard_button(instance, settings).await
 	}
 
@@ -357,8 +414,16 @@ impl Action for PlaySoundboardSoundAction {
 			return Ok(());
 		};
 
-		let sound_id = settings.get("sound_id").cloned();
-		let guild_id = settings.get("guild_id").cloned();
+		let sound_id = settings
+			.get("sound_id")
+			.cloned()
+			.map(|value| value.trim().to_string())
+			.filter(|value| !value.is_empty());
+		let guild_id = settings
+			.get("guild_id")
+			.cloned()
+			.map(|value| value.trim().to_string())
+			.filter(|value| !value.is_empty());
 
 		let Some(sound_id) = sound_id else {
 			log::error!("No sound_id provided in settings");
@@ -452,20 +517,18 @@ impl Action for PlaySoundboardSoundAction {
 							emoji_name: sound.emoji_name.clone(),
 						})
 						.collect();
-					send_sounds_response(instance, sounds, None).await?;
+					send_sounds_response(instance, &guild_id, sounds, None).await?;
 					return Ok(());
 				}
 				drop(sounds_map);
 
 				if let Some(error) = soundboard_request_error().read().await.clone() {
-					send_sounds_response(instance, vec![], Some(error)).await?;
+					send_sounds_response(instance, &guild_id, vec![], Some(error)).await?;
 					return Ok(());
 				}
 
-				crate::rpc_events::set_pending_soundboard_guild(Some(guild_id.clone())).await;
-				if let Err(error) = request_soundboard_sounds_for_guild(&guild_id).await {
-					crate::rpc_events::set_pending_soundboard_guild(None).await;
-					send_sounds_response(instance, vec![], Some(error)).await?;
+				if let Err(error) = request_soundboard_sounds_for_guild(instance, &guild_id).await {
+					send_sounds_response(instance, &guild_id, vec![], Some(error)).await?;
 					return Ok(());
 				}
 				wait_for_sounds(instance, &guild_id).await?;
@@ -489,8 +552,9 @@ impl Action for PlaySoundboardSoundAction {
 		}
 
 		if !new_settings.is_empty() {
-			instance.set_settings(&new_settings).await?;
-			update_soundboard_button(instance, &new_settings).await?;
+			let merged_settings = merge_instance_settings(instance, &new_settings).await;
+			instance.set_settings(&merged_settings).await?;
+			update_soundboard_button(instance, &merged_settings).await?;
 		}
 
 		Ok(())

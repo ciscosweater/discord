@@ -2,21 +2,20 @@ use crate::client::discord_client;
 use crate::client::schedule_reconnect;
 use crate::current_settings;
 use crate::{
-	PlaySoundboardSoundAction,
 	actions::{
-		GuildInfo, GuildsResponse, SoundInfo, SoundsResponse, UserVolumeControlButtonAction,
+		GuildInfo, SoundInfo, SoundsResponse, UserVolumeControlButtonAction,
 		UserVolumeControlDialAction,
 	},
 };
 
 use discord_ipc_rust::models::receive::{
-	ReceivedItem, commands::ReturnedCommand, events::ReturnedEvent,
+	CommandResponse, ReceivedItem, commands::ReturnedCommand, events::ReturnedEvent,
 };
 use discord_ipc_rust::models::send::commands::{GetChannelArgs, SentCommand};
 use discord_ipc_rust::models::send::events::SubscribeableEvent;
 use discord_ipc_rust::models::shared::Channel;
 use discord_ipc_rust::models::soundboard::SoundboardSound;
-use openaction::{Action as _, ActionUuid, set_global_settings, visible_instances};
+use openaction::{Action as _, ActionUuid, get_instance, set_global_settings, visible_instances};
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -28,13 +27,40 @@ pub fn soundboard_sounds() -> &'static RwLock<HashMap<String, Vec<SoundboardSoun
 	SOUNDS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-pub fn pending_soundboard_guild() -> &'static RwLock<Option<String>> {
-	static PENDING_GUILD: OnceLock<RwLock<Option<String>>> = OnceLock::new();
-	PENDING_GUILD.get_or_init(|| RwLock::new(None))
+#[derive(Clone, Debug)]
+pub struct PendingSoundboardRequest {
+	pub instance_id: String,
+	pub guild_id: String,
 }
 
-pub async fn set_pending_soundboard_guild(guild_id: Option<String>) {
-	*pending_soundboard_guild().write().await = guild_id;
+pub fn pending_soundboard_requests(
+) -> &'static RwLock<HashMap<String, PendingSoundboardRequest>> {
+	static REQUESTS: OnceLock<RwLock<HashMap<String, PendingSoundboardRequest>>> = OnceLock::new();
+	REQUESTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub async fn register_pending_soundboard_request(
+	nonce: &str,
+	instance_id: &str,
+	guild_id: &str,
+) {
+	pending_soundboard_requests().write().await.insert(
+		nonce.to_string(),
+		PendingSoundboardRequest {
+			instance_id: instance_id.to_string(),
+			guild_id: guild_id.to_string(),
+		},
+	);
+}
+
+pub async fn unregister_pending_soundboard_request(
+	nonce: &str,
+) -> Option<PendingSoundboardRequest> {
+	pending_soundboard_requests().write().await.remove(nonce)
+}
+
+pub async fn clear_pending_soundboard_requests() {
+	pending_soundboard_requests().write().await.clear();
 }
 
 pub fn soundboard_request_error() -> &'static RwLock<Option<String>> {
@@ -55,34 +81,24 @@ pub fn guild_request_error() -> &'static RwLock<Option<String>> {
 async fn broadcast_soundboard_guilds(guilds: Vec<GuildInfo>, error: Option<String>) {
 	*available_soundboard_guilds().write().await = guilds.clone();
 	*guild_request_error().write().await = error.clone();
-
-	let payload = match serde_json::to_string(&GuildsResponse {
-		action: "guilds_result".to_string(),
-		guilds,
-		error,
-	}) {
-		Ok(payload) => payload,
-		Err(error) => {
-			log::error!("Failed to serialize guild list response: {}", error);
-			return;
-		}
-	};
-
-	for instance in visible_instances(PlaySoundboardSoundAction::UUID).await {
-		if let Err(error) = instance.send_to_property_inspector(&payload).await {
-			log::error!("Failed to forward guild list to PI: {}", error);
-		}
-	}
 }
 
-async fn broadcast_soundboard_response(
-	guild_id: Option<String>,
+fn filter_soundboard_sounds(
+	requested_guild_id: Option<&str>,
 	sounds: Vec<SoundboardSound>,
-	error: Option<String>,
-) {
-	let requested_guild_id = pending_soundboard_guild().read().await.clone();
-	let cache_guild_id = requested_guild_id.or(guild_id);
-	let filtered_sounds = match cache_guild_id.as_deref() {
+) -> (Option<String>, Vec<SoundboardSound>) {
+	let cache_guild_id = requested_guild_id.map(str::to_string).or_else(|| {
+		sounds
+			.first()
+			.map(|first| {
+				if first.guild_id == "0" {
+					"DEFAULT".to_string()
+				} else {
+					first.guild_id.clone()
+				}
+			})
+	});
+	let filtered_sounds = match requested_guild_id {
 		Some("DEFAULT") => sounds
 			.into_iter()
 			.filter(|sound| sound.guild_id == "0")
@@ -93,7 +109,16 @@ async fn broadcast_soundboard_response(
 			.collect(),
 		None => sounds,
 	};
+	(cache_guild_id, filtered_sounds)
+}
 
+async fn cache_soundboard_response(
+	requested_guild_id: Option<String>,
+	sounds: Vec<SoundboardSound>,
+	error: Option<String>,
+) -> Vec<SoundboardSound> {
+	let (cache_guild_id, filtered_sounds) =
+		filter_soundboard_sounds(requested_guild_id.as_deref(), sounds);
 	if let Some(guild_id) = cache_guild_id {
 		soundboard_sounds()
 			.write()
@@ -101,9 +126,32 @@ async fn broadcast_soundboard_response(
 			.insert(guild_id.clone(), filtered_sounds.clone());
 	}
 
-	let response = SoundsResponse {
+	*soundboard_request_error().write().await = None;
+	if let Some(error) = error {
+		*soundboard_request_error().write().await = Some(error);
+	}
+
+	filtered_sounds
+}
+
+async fn send_soundboard_response_to_instance(
+	instance_id: &str,
+	guild_id: &str,
+	sounds: &[SoundboardSound],
+	error: Option<String>,
+) {
+	let Some(instance) = get_instance(instance_id.to_string()).await else {
+		log::debug!(
+			"Skipping direct soundboard response for missing instance {}",
+			instance_id
+		);
+		return;
+	};
+
+	let payload = match serde_json::to_string(&SoundsResponse {
 		action: "sounds_result".to_string(),
-		sounds: filtered_sounds
+		guild_id: guild_id.to_string(),
+		sounds: sounds
 			.iter()
 			.map(|sound| SoundInfo {
 				sound_id: sound.sound_id.clone(),
@@ -112,23 +160,24 @@ async fn broadcast_soundboard_response(
 			})
 			.collect(),
 		error,
-	};
-
-	*soundboard_request_error().write().await = None;
-	set_pending_soundboard_guild(None).await;
-
-	let payload = match serde_json::to_string(&response) {
+	}) {
 		Ok(payload) => payload,
 		Err(error) => {
-			log::error!("Failed to serialize soundboard sounds response: {}", error);
+			log::error!(
+				"Failed to serialize direct soundboard response for instance {}: {}",
+				instance_id,
+				error
+			);
 			return;
 		}
 	};
 
-	for instance in visible_instances(PlaySoundboardSoundAction::UUID).await {
-		if let Err(error) = instance.send_to_property_inspector(&payload).await {
-			log::error!("Failed to forward soundboard sounds to PI: {}", error);
-		}
+	if let Err(error) = instance.send_to_property_inspector(&payload).await {
+		log::error!(
+			"Failed to send direct soundboard response to instance {}: {}",
+			instance_id,
+			error
+		);
 	}
 }
 
@@ -502,7 +551,6 @@ async fn remove_voice_participant(
 	broadcast_voice_participants().await;
 }
 
-// Central handler for Discord RPC events and command responses we subscribe to (e.g., voice settings).
 pub async fn handle_rpc_event(item: ReceivedItem) {
 	match item {
 		ReceivedItem::Event(event) => match *event {
@@ -519,23 +567,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				{
 					let message = "Quick Select is not supported by this Discord RPC client. Use Manual Entry below.".to_string();
 					*soundboard_request_error().write().await = Some(message.clone());
-					set_pending_soundboard_guild(None).await;
-					let payload = match serde_json::to_string(&SoundsResponse {
-						action: "sounds_result".to_string(),
-						sounds: vec![],
-						error: Some(message),
-					}) {
-						Ok(payload) => payload,
-						Err(error) => {
-							log::error!("Failed to serialize soundboard error response: {}", error);
-							return;
-						}
-					};
-					for instance in visible_instances(PlaySoundboardSoundAction::UUID).await {
-						if let Err(error) = instance.send_to_property_inspector(&payload).await {
-							log::error!("Failed to forward soundboard error to PI: {}", error);
-						}
-					}
+					clear_pending_soundboard_requests().await;
 				}
 				if error.code == 4006 {
 					let mut current = current_settings().write().await;
@@ -570,69 +602,92 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				remove_voice_participant(voice).await;
 			}
 			ReturnedEvent::SoundboardSounds(sounds) => {
-				let guild_id = sounds.first().map(|first| first.guild_id.clone());
-				broadcast_soundboard_response(guild_id, sounds, None).await;
-			}
-			_ => {}
-		},
-		ReceivedItem::Command(command) => match *command {
-			ReturnedCommand::GetVoiceSettings(voice) => {
-				apply_voice_state(voice.mute, voice.deaf).await;
-			}
-			ReturnedCommand::GetSelectedVoiceChannel(channel) => {
-				handle_selected_voice_channel(channel).await;
-			}
-			ReturnedCommand::GetChannel(channel) => {
-				let current_channel = current_subscribed_voice_channel().await;
-				log::info!(
-					"Received GetChannel response: channel_id={}, current_subscription={}, voice_states_present={}, participants={}",
-					channel.id,
-					current_channel.as_deref().unwrap_or("<none>"),
-					channel.voice_states.is_some(),
-					channel
-						.voice_states
-						.as_ref()
-						.map(|states| states.len())
-						.unwrap_or(0)
-				);
-				if current_channel.as_deref() == Some(channel.id.as_str()) {
-					let snapshot = channel.voice_states.unwrap_or_default();
-					replace_voice_participants(&channel.id, &snapshot).await;
-				} else {
-					log::debug!(
-						"Ignoring GetChannel response for {} because current subscription is {}",
-						channel.id,
-						current_channel.as_deref().unwrap_or("<none>")
-					);
-				}
-			}
-			ReturnedCommand::GetGuilds(data) => {
-				let mut guilds: Vec<GuildInfo> = data
-					.guilds
-					.into_iter()
-					.map(|guild| GuildInfo {
-						guild_id: guild.id,
-						name: guild.name,
-					})
-					.collect();
-				guilds.sort_by(|left, right| {
-					left.name.to_lowercase().cmp(&right.name.to_lowercase())
+				let guild_id = sounds.first().map(|first| {
+					if first.guild_id == "0" {
+						"DEFAULT".to_string()
+					} else {
+						first.guild_id.clone()
+					}
 				});
-				guilds.insert(
-					0,
-					GuildInfo {
-						guild_id: "DEFAULT".to_string(),
-						name: "Discord Default Sounds".to_string(),
-					},
-				);
-				broadcast_soundboard_guilds(guilds, None).await;
-			}
-			ReturnedCommand::GetSoundboardSounds(sounds) => {
-				let guild_id = sounds.first().map(|first| first.guild_id.clone());
-				broadcast_soundboard_response(guild_id, sounds, None).await;
+				let _ = cache_soundboard_response(guild_id, sounds, None).await;
 			}
 			_ => {}
 		},
+		ReceivedItem::Command(command_response) => {
+			let CommandResponse { nonce, command } = *command_response;
+			match command {
+				ReturnedCommand::GetVoiceSettings(voice) => {
+					apply_voice_state(voice.mute, voice.deaf).await;
+				}
+				ReturnedCommand::GetSelectedVoiceChannel(channel) => {
+					handle_selected_voice_channel(channel).await;
+				}
+				ReturnedCommand::GetChannel(channel) => {
+					let current_channel = current_subscribed_voice_channel().await;
+					log::info!(
+						"Received GetChannel response: channel_id={}, current_subscription={}, voice_states_present={}, participants={}",
+						channel.id,
+						current_channel.as_deref().unwrap_or("<none>"),
+						channel.voice_states.is_some(),
+						channel
+							.voice_states
+							.as_ref()
+							.map(|states| states.len())
+							.unwrap_or(0)
+					);
+					if current_channel.as_deref() == Some(channel.id.as_str()) {
+						let snapshot = channel.voice_states.unwrap_or_default();
+						replace_voice_participants(&channel.id, &snapshot).await;
+					} else {
+						log::debug!(
+							"Ignoring GetChannel response for {} because current subscription is {}",
+							channel.id,
+							current_channel.as_deref().unwrap_or("<none>")
+						);
+					}
+				}
+				ReturnedCommand::GetGuilds(data) => {
+					let mut guilds: Vec<GuildInfo> = data
+						.guilds
+						.into_iter()
+						.map(|guild| GuildInfo {
+							guild_id: guild.id,
+							name: guild.name,
+						})
+						.collect();
+					guilds.sort_by(|left, right| {
+						left.name.to_lowercase().cmp(&right.name.to_lowercase())
+					});
+					guilds.insert(
+						0,
+						GuildInfo {
+							guild_id: "DEFAULT".to_string(),
+							name: "Discord Default Sounds".to_string(),
+						},
+					);
+					broadcast_soundboard_guilds(guilds, None).await;
+				}
+				ReturnedCommand::GetSoundboardSounds(sounds) => {
+					let pending_request = match nonce.as_deref() {
+						Some(nonce) => unregister_pending_soundboard_request(nonce).await,
+						None => None,
+					};
+					let requested_guild_id = pending_request.as_ref().map(|request| request.guild_id.clone());
+					let filtered_sounds =
+						cache_soundboard_response(requested_guild_id, sounds, None).await;
+					if let Some(request) = pending_request {
+						send_soundboard_response_to_instance(
+							&request.instance_id,
+							&request.guild_id,
+							&filtered_sounds,
+							None,
+						)
+						.await;
+					}
+				}
+				_ => {}
+			}
+		}
 		ReceivedItem::SocketClosed => {
 			log::warn!("Discord closed; attempting to reconnect");
 			clear_voice_participants().await;
