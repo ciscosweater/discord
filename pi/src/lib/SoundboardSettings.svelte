@@ -53,6 +53,7 @@
 	let savedGuildId = "";
 	let savedSoundName = "";
 	let savedEmojiName = "";
+	let savedShowSoundTitle = true;
 	let showSoundTitle = true;
 	let draftGuildId = "";
 	let draftSoundId = "";
@@ -76,13 +77,14 @@
 			nextSavedGuildId !== savedGuildId ||
 			nextSavedSoundName !== savedSoundName ||
 			nextSavedEmojiName !== savedEmojiName ||
-			nextShowSoundTitle !== showSoundTitle;
+			nextShowSoundTitle !== savedShowSoundTitle;
 
 		if (changed) {
 			savedSoundId = nextSavedSoundId;
 			savedGuildId = nextSavedGuildId;
 			savedSoundName = nextSavedSoundName;
 			savedEmojiName = nextSavedEmojiName;
+			savedShowSoundTitle = nextShowSoundTitle;
 			showSoundTitle = nextShowSoundTitle;
 			draftGuildId = nextSavedGuildId;
 			draftSoundId = nextSavedSoundId;
