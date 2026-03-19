@@ -87,7 +87,6 @@
       "Icon": "actions/voicechannel_1",
       "Tooltip": "Leave the current voice channel",
       "Controllers": ["Keypad"],
-      "PropertyInspectorPath": "pi/voicechannel.html",
       "DisableAutomaticStates": true,
       "States": [{ "Image": "actions/voicechannel_1" }]
     },
