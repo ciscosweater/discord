@@ -4,7 +4,7 @@ edition = "2024"
 
 [dependencies]
 openaction = "2.3"
-discord-ipc-rust = { git = "https://github.com/nekename/discord-ipc-rust.git" }
+discord-ipc-rust = { git = "https://github.com/ciscosweater/discord-ipc-rust.git" }
 serde = "1.0"
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros"] }

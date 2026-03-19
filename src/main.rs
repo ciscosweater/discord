@@ -48,21 +48,27 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
 		let settings: DiscordSettings =
 			serde_json::from_value(event.payload.settings).unwrap_or_default();
 
+		log::info!("did_receive_global_settings: client_id present={} client_secret present={} access_token present={}",
+			!settings.client_id.is_empty(),
+			!settings.client_secret.is_empty(),
+			!settings.access_token.is_empty());
+
 		// Only react when the stored settings actually changed so we can avoid reconnect churn.
 		let current = current_settings().read().await;
 		let settings_changed = current.client_id != settings.client_id
 			|| current.client_secret != settings.client_secret
-			|| current.access_token != settings.access_token
-			|| current.client_id.is_empty()
-			|| current.client_secret.is_empty()
-			|| current.access_token.is_empty();
+			|| current.access_token != settings.access_token;
 		drop(current);
+
+		log::info!("settings_changed={}", settings_changed);
 
 		if settings_changed {
 			log::info!("Global settings changed, reinitializing Discord client");
 
 			// Persist the new configuration before attempting to reconnect.
-			*current_settings().write().await = settings;
+			*current_settings().write().await = settings.clone();
+
+			log::info!("Stored new settings, calling schedule_reconnect");
 
 			schedule_reconnect();
 		}
@@ -92,6 +98,9 @@ async fn main() -> OpenActionResult<()> {
 	register_action(PushToTalkAction).await;
 	register_action(SelectVoiceChannelAction).await;
 	register_action(LeaveVoiceChannelAction).await;
+	register_action(UserVolumeControlButtonAction).await;
+	register_action(UserVolumeControlDialAction).await;
+	register_action(PlaySoundboardSoundAction).await;
 
 	run(std::env::args().collect()).await
 }

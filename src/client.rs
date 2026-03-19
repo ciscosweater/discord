@@ -42,6 +42,9 @@ fn reconnecting_flag() -> &'static AtomicBool {
 // Attempts to reinitialize the Discord IPC client using the stored settings.
 async fn reinitialize() {
 	let settings = current_settings().read().await.clone();
+	log::info!("reinitialize: client_id present={} client_secret present={}",
+		!settings.client_id.is_empty(),
+		!settings.client_secret.is_empty());
 	match create_discord_client(&settings).await {
 		Ok(client) => {
 			*discord_client().write().await = Some(client);
@@ -92,6 +95,14 @@ async fn setup_discord_client(
 	))
 	.await
 	.map_err(|e| format!("Failed to subscribe to voice updates: {}", e))?;
+
+	rpc.emit_command(&SentCommand::Subscribe(
+		SubscribeableEvent::VoiceStateUpdate {
+			channel_id: String::new(),
+		},
+	))
+	.await
+	.map_err(|e| format!("Failed to subscribe to voice state updates: {}", e))?;
 
 	// Request current voice settings so buttons reflect the initial state immediately.
 	rpc.emit_command(&SentCommand::GetVoiceSettings)
