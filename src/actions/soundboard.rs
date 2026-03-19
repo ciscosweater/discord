@@ -368,10 +368,11 @@ async fn update_soundboard_button(
 			.map(|value| value.trim())
 			.filter(|value| !value.is_empty())
 			.map(str::to_string)
+			.unwrap_or_default()
 	} else {
-		None
+		String::new()
 	};
-	instance.set_title(title, None).await?;
+	instance.set_title(Some(title), None).await?;
 	Ok(())
 }
 
