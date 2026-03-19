@@ -1,11 +1,62 @@
 <script lang="ts">
-	import { sendToPlugin } from "@openaction/svelte-pi";
+	import { onDestroy, onMount } from "svelte";
+	import { actionSettings, eventTarget, sendToPlugin } from "@openaction/svelte-pi";
+
+	interface UserInfo {
+		user_id: string;
+		name: string;
+		nick?: string | null;
+		volume: number;
+		mute: boolean;
+	}
+
+	interface UsersResponse {
+		action: string;
+		users: UserInfo[];
+	}
 
 	let userId = "";
 	let mode = "mute";
 	let muteType = "toggle";
 	let adjustValue = 0;
 	let setValue = 100;
+	let users: UserInfo[] = [];
+	let listener: ((event: Event) => void) | null = null;
+
+	$: {
+		if ($actionSettings.user_id !== undefined) {
+			userId = $actionSettings.user_id;
+		}
+		if ($actionSettings.mode !== undefined) {
+			mode = $actionSettings.mode;
+		}
+		if ($actionSettings.mute_type !== undefined) {
+			muteType = $actionSettings.mute_type;
+		}
+		if ($actionSettings.adjust_value !== undefined) {
+			adjustValue = Number($actionSettings.adjust_value) || 0;
+		}
+		if ($actionSettings.set_value !== undefined) {
+			setValue = Number($actionSettings.set_value) || 100;
+		}
+	}
+
+	onMount(() => {
+		listener = (event: Event) => {
+			const detail = (event as CustomEvent<UsersResponse>).detail;
+			if (detail?.action === "users_result") {
+				users = detail.users;
+			}
+		};
+		eventTarget.addEventListener("sendToPropertyInspector", listener);
+		sendToPlugin({ action: "get_users" });
+	});
+
+	onDestroy(() => {
+		if (listener) {
+			eventTarget.removeEventListener("sendToPropertyInspector", listener);
+		}
+	});
 
 	function saveSettings() {
 		sendToPlugin({
@@ -20,6 +71,10 @@
 	function handleModeChange() {
 		saveSettings();
 	}
+
+	function handleUserChange() {
+		saveSettings();
+	}
 </script>
 
 <div class="p-3">
@@ -27,6 +82,37 @@
 	<p class="mb-3 text-xs text-neutral-400">
 		Control another user's volume or mute state. The user must be in a voice channel with you.
 	</p>
+
+	<div class="mb-3">
+		<div class="mb-1 flex items-center justify-between">
+			<label for="userPicker" class="block text-xs text-neutral-200">User in Current Voice Channel</label>
+			<button
+				type="button"
+				on:click={() => sendToPlugin({ action: "get_users" })}
+				class="text-xs text-neutral-400 hover:text-neutral-200"
+			>
+				Refresh
+			</button>
+		</div>
+		<select
+			id="userPicker"
+			bind:value={userId}
+			on:change={handleUserChange}
+			class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 focus:border-neutral-600 focus:outline-none"
+		>
+			<option value="">Select a user...</option>
+			{#each users as user}
+				<option value={user.user_id}>
+					{user.nick ? `${user.nick} (${user.name})` : user.name}
+					{user.mute ? " [Muted]" : ""}
+					{` ${user.volume}%`}
+				</option>
+			{/each}
+		</select>
+		{#if users.length === 0}
+			<p class="mt-1 text-xs text-neutral-500">No voice participants detected in the current Discord voice channel.</p>
+		{/if}
+	</div>
 
 	<div class="mb-3">
 		<label for="userId" class="mb-1 block text-xs text-neutral-200">User ID</label>
@@ -94,5 +180,9 @@
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 focus:border-neutral-600 focus:outline-none"
 			/>
 		</div>
+	{/if}
+
+	{#if userId}
+		<p class="text-xs text-neutral-500">Selected user ID: {userId}</p>
 	{/if}
 </div>

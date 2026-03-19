@@ -1,4 +1,14 @@
 target/
 Cargo.lock
 
+# Build output
+build/
+pi/build/
+
 assets/pi/
+
+# IDE
+.idea/
+*.iml
+CLAUDE.md
+discord-soundboard-mute-ports.md

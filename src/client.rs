@@ -1,5 +1,5 @@
 use crate::oauth::exchange_code_for_token;
-use crate::rpc_events::handle_rpc_event;
+use crate::rpc_events::{clear_voice_participants, handle_rpc_event};
 use crate::{DiscordSettings, current_settings};
 
 use std::sync::{
@@ -96,17 +96,31 @@ async fn setup_discord_client(
 	.await
 	.map_err(|e| format!("Failed to subscribe to voice updates: {}", e))?;
 
+	rpc.emit_command(&SentCommand::Subscribe(
+		SubscribeableEvent::VoiceChannelSelect,
+	))
+	.await
+	.map_err(|e| format!("Failed to subscribe to voice channel selection: {}", e))?;
+
 	// Request current voice settings so buttons reflect the initial state immediately.
 	log::debug!("Requesting GetVoiceSettings");
 	rpc.emit_command(&SentCommand::GetVoiceSettings)
 		.await
 		.map_err(|e| format!("Failed to fetch initial voice settings: {}", e))?;
 
+	log::debug!("Requesting GetSelectedVoiceChannel");
+	rpc.emit_command(&SentCommand::GetSelectedVoiceChannel)
+		.await
+		.map_err(|e| format!("Failed to fetch current voice channel: {}", e))?;
+
 	let mut current = current_settings().write().await;
 	current.error = None;
 	if let Err(e) = set_global_settings(&*current).await {
 		log::error!("Failed to clear error: {}", e);
 	}
+	drop(current);
+
+	clear_voice_participants().await;
 
 	Ok(())
 }

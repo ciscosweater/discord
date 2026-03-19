@@ -1,4 +1,5 @@
 use crate::client::discord_client;
+use crate::rpc_events::{current_voice_participant, current_voice_participants};
 
 use std::collections::HashMap;
 
@@ -7,11 +8,18 @@ use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 
 #[derive(Debug, serde::Deserialize)]
 struct UserVolumePayload {
+	action: Option<String>,
 	user_id: Option<String>,
 	mode: Option<String>,
 	mute_type: Option<String>,
 	adjust_value: Option<i32>,
 	set_value: Option<i32>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct UsersResponse {
+	action: String,
+	users: Vec<crate::rpc_events::VoiceParticipant>,
 }
 
 async fn update_user_voice_setting(
@@ -47,6 +55,14 @@ impl Action for UserVolumeControlButtonAction {
 	const UUID: ActionUuid = "me.amankhanna.oadiscord.uservolumecontrolbutton";
 	type Settings = HashMap<String, String>;
 
+	async fn property_inspector_did_appear(
+		&self,
+		instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		send_users_response(instance).await
+	}
+
 	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
 		log::debug!("UserVolumeControlButton settings: {:?}", settings);
 
@@ -67,8 +83,9 @@ impl Action for UserVolumeControlButtonAction {
 
 		match mode.as_str() {
 			"mute" => {
+				let current = current_voice_participant(&user_id).await;
 				let mute = match mute_type.as_str() {
-					"toggle" => None, // Would need current state - skip for now
+					"toggle" => Some(!current.as_ref().map(|user| user.mute).unwrap_or(false)),
 					"mute" => Some(true),
 					"unmute" => Some(false),
 					_ => Some(true),
@@ -89,14 +106,16 @@ impl Action for UserVolumeControlButtonAction {
 					.get("adjust_value")
 					.and_then(|v| v.parse().ok())
 					.unwrap_or(0);
-				// Volume adjustment requires knowing current volume
-				// For now, just set to a relative value
+				let current_volume = current_voice_participant(&user_id)
+					.await
+					.map(|user| user.volume)
+					.unwrap_or(100);
 				update_user_voice_setting(
 					instance,
 					SetUserVoiceSettingsArgs {
 						user_id,
 						pan: None,
-						volume: Some(100 + adjust_value),
+						volume: Some((current_volume + adjust_value).clamp(0, 200)),
 						mute: None,
 					},
 				)
@@ -140,6 +159,10 @@ impl Action for UserVolumeControlButtonAction {
 			}
 		};
 
+		if payload.action.as_deref() == Some("get_users") {
+			return send_users_response(instance).await;
+		}
+
 		let mut new_settings = HashMap::new();
 		if let Some(user_id) = payload.user_id {
 			new_settings.insert("user_id".to_string(), user_id);
@@ -171,8 +194,22 @@ impl Action for UserVolumeControlDialAction {
 	const UUID: ActionUuid = "me.amankhanna.oadiscord.uservolumecontroldial";
 	type Settings = HashMap<String, String>;
 
-	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
-		log::debug!("UserVolumeControlDial settings: {:?}", settings);
+	async fn property_inspector_did_appear(
+		&self,
+		instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		send_users_response(instance).await
+	}
+
+	async fn dial_rotate(
+		&self,
+		instance: &Instance,
+		settings: &Self::Settings,
+		ticks: i16,
+		_pressed: bool,
+	) -> OpenActionResult<()> {
+		log::debug!("UserVolumeControlDial settings: {:?}, ticks={}", settings, ticks);
 
 		let user_id = settings.get("user_id").cloned();
 		let mode = settings.get("mode").cloned().unwrap_or_else(|| "adjust".to_string());
@@ -187,16 +224,22 @@ impl Action for UserVolumeControlDialAction {
 
 		match mode.as_str() {
 			"adjust" => {
-				let adjust_value: i32 = settings
+				let step = settings
 					.get("adjust_value")
 					.and_then(|v| v.parse().ok())
-					.unwrap_or(0);
+					.unwrap_or(5_i32)
+					.abs()
+					.max(1);
+				let current_volume = current_voice_participant(&user_id)
+					.await
+					.map(|user| user.volume)
+					.unwrap_or(100);
 				update_user_voice_setting(
 					instance,
 					SetUserVoiceSettingsArgs {
 						user_id,
 						pan: None,
-						volume: Some((100 + adjust_value).clamp(0, 200)),
+						volume: Some((current_volume + i32::from(ticks) * step).clamp(0, 200)),
 						mute: None,
 					},
 				)
@@ -218,19 +261,63 @@ impl Action for UserVolumeControlDialAction {
 				)
 				.await
 			}
-			_ => {
-				// For dial with mute mode, toggle mute
+			_ => Ok(()),
+		}
+	}
+
+	async fn dial_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		log::debug!("UserVolumeControlDial press settings: {:?}", settings);
+
+		let user_id = settings.get("user_id").cloned();
+		let mode = settings.get("mode").cloned().unwrap_or_else(|| "adjust".to_string());
+
+		let Some(user_id) = user_id else {
+			log::error!("No user_id provided in settings");
+			instance.show_alert().await?;
+			return Ok(());
+		};
+
+		match mode.as_str() {
+			"mute" => {
+				let mute_type = settings
+					.get("mute_type")
+					.cloned()
+					.unwrap_or_else(|| "toggle".to_string());
+				let current = current_voice_participant(&user_id).await;
+				let mute = match mute_type.as_str() {
+					"toggle" => Some(!current.as_ref().map(|user| user.mute).unwrap_or(false)),
+					"mute" => Some(true),
+					"unmute" => Some(false),
+					_ => Some(true),
+				};
 				update_user_voice_setting(
 					instance,
 					SetUserVoiceSettingsArgs {
 						user_id,
 						pan: None,
 						volume: None,
-						mute: Some(true),
+						mute,
 					},
 				)
 				.await
 			}
+			"set" => {
+				let set_value: i32 = settings
+					.get("set_value")
+					.and_then(|v| v.parse().ok())
+					.unwrap_or(100);
+				update_user_voice_setting(
+					instance,
+					SetUserVoiceSettingsArgs {
+						user_id,
+						pan: None,
+						volume: Some(set_value.clamp(0, 200)),
+						mute: None,
+					},
+				)
+				.await
+			}
+			_ => Ok(()),
 		}
 	}
 
@@ -247,6 +334,10 @@ impl Action for UserVolumeControlDialAction {
 				return Ok(());
 			}
 		};
+
+		if payload.action.as_deref() == Some("get_users") {
+			return send_users_response(instance).await;
+		}
 
 		let mut new_settings = HashMap::new();
 		if let Some(user_id) = payload.user_id {
@@ -271,4 +362,14 @@ impl Action for UserVolumeControlDialAction {
 
 		Ok(())
 	}
+}
+
+async fn send_users_response(instance: &Instance) -> OpenActionResult<()> {
+	let response = UsersResponse {
+		action: "users_result".to_string(),
+		users: current_voice_participants().await,
+	};
+	instance
+		.send_to_property_inspector(&serde_json::to_string(&response).unwrap())
+		.await
 }
