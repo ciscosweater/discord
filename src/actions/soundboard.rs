@@ -10,6 +10,7 @@ use std::process::Command;
 use discord_ipc_rust::models::send::commands::{GetSoundboardSoundsArgs, SentCommand};
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 use serde_json::json;
+use tokio::task;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
@@ -87,9 +88,14 @@ async fn send_sounds_response(
 		sounds,
 		error,
 	};
-	instance
-		.send_to_property_inspector(&serde_json::to_string(&response).unwrap())
-		.await
+	let payload = match serde_json::to_string(&response) {
+		Ok(payload) => payload,
+		Err(error) => {
+			log::error!("Failed to serialize soundboard sounds response: {}", error);
+			return Ok(());
+		}
+	};
+	instance.send_to_property_inspector(&payload).await
 }
 
 async fn send_guilds_response(
@@ -201,7 +207,12 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 		let hash = hasher.finish();
 		let filename = format!("soundboard_{hash:016x}.png");
 		let output_path = generated_dir.join(&filename);
-		let temp_emoji_path = generated_dir.join(format!("soundboard_{hash:016x}_emoji.png"));
+		let image_path = format!("actions/generated/{}", filename.trim_end_matches(".png"));
+		if output_path.exists() {
+			return Some(image_path);
+		}
+		let temp_emoji_path =
+			generated_dir.join(format!("soundboard_{hash:016x}_emoji_{}.png", Uuid::new_v4()));
 		let blank_svg_path = actions_dir.join("blank.svg");
 		let pango_markup = format!(
 			r#"<span font="Noto Color Emoji 70">{}</span>"#,
@@ -268,7 +279,6 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 			return None;
 		}
 
-		let image_path = format!("actions/generated/{}", filename.trim_end_matches(".png"));
 		Some(image_path)
 	} else {
 		Some("actions/blank".to_string())
@@ -276,7 +286,11 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 }
 
 async fn update_soundboard_button(instance: &Instance, settings: &HashMap<String, String>) -> OpenActionResult<()> {
-	let image = write_soundboard_image(settings.get("emoji_name").map(String::as_str))
+	let emoji_name = settings.get("emoji_name").cloned();
+	let image = task::spawn_blocking(move || write_soundboard_image(emoji_name.as_deref()))
+		.await
+		.ok()
+		.flatten()
 		.unwrap_or_else(|| "actions/blank".to_string());
 	instance.set_image(Some(image), None).await?;
 	instance.set_title(None::<String>, None).await?;
