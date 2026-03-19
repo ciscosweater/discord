@@ -115,6 +115,13 @@ async fn setup_discord_client(
 		.await
 		.map_err(|e| format!("Failed to fetch current voice channel: {}", e))?;
 
+	// Warm the soundboard guild cache so the first opened Property Inspector
+	// does not block on the initial guild fetch round-trip.
+	log::debug!("Requesting GetGuilds");
+	if let Err(error) = rpc.emit_command(&SentCommand::GetGuilds).await {
+		log::warn!("Failed to prefetch soundboard guilds: {}", error);
+	}
+
 	let mut current = current_settings().write().await;
 	current.error = None;
 	if let Err(e) = set_global_settings(&*current).await {

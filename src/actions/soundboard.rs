@@ -26,6 +26,7 @@ struct SoundboardPayload {
 	guild_id: Option<String>,
 	sound_name: Option<String>,
 	emoji_name: Option<String>,
+	show_sound_title: Option<bool>,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -234,6 +235,14 @@ fn escape_pango_text(input: &str) -> String {
 	escape_xml_text(input)
 }
 
+fn sound_title_enabled(settings: &HashMap<String, String>) -> bool {
+	settings
+		.get("show_sound_title")
+		.map(|value| value.trim())
+		.map(|value| !value.eq_ignore_ascii_case("false"))
+		.unwrap_or(true)
+}
+
 fn plugin_actions_dir() -> Option<PathBuf> {
 	let exe_path = std::env::current_exe().ok()?;
 	let exe_dir = exe_path.parent()?.to_path_buf();
@@ -353,7 +362,16 @@ async fn update_soundboard_button(
 		.flatten()
 		.unwrap_or_else(|| "actions/blank".to_string());
 	instance.set_image(Some(image), None).await?;
-	instance.set_title(None::<String>, None).await?;
+	let title = if sound_title_enabled(settings) {
+		settings
+			.get("sound_name")
+			.map(|value| value.trim())
+			.filter(|value| !value.is_empty())
+			.map(str::to_string)
+	} else {
+		None
+	};
+	instance.set_title(title, None).await?;
 	Ok(())
 }
 
@@ -549,6 +567,12 @@ impl Action for PlaySoundboardSoundAction {
 		}
 		if let Some(emoji_name) = payload.emoji_name {
 			new_settings.insert("emoji_name".to_string(), emoji_name);
+		}
+		if let Some(show_sound_title) = payload.show_sound_title {
+			new_settings.insert(
+				"show_sound_title".to_string(),
+				show_sound_title.to_string(),
+			);
 		}
 
 		if !new_settings.is_empty() {

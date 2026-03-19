@@ -33,10 +33,27 @@
 		return null;
 	}
 
+	function parseBooleanSetting(value: unknown, defaultValue: boolean): boolean {
+		if (typeof value === "boolean") {
+			return value;
+		}
+		if (typeof value === "string") {
+			const normalized = value.trim().toLowerCase();
+			if (normalized === "true") {
+				return true;
+			}
+			if (normalized === "false") {
+				return false;
+			}
+		}
+		return defaultValue;
+	}
+
 	let savedSoundId = "";
 	let savedGuildId = "";
 	let savedSoundName = "";
 	let savedEmojiName = "";
+	let showSoundTitle = true;
 	let draftGuildId = "";
 	let draftSoundId = "";
 	let draftSoundName = "";
@@ -53,17 +70,20 @@
 		const nextSavedGuildId = $actionSettings.guild_id ?? "";
 		const nextSavedSoundName = $actionSettings.sound_name ?? "";
 		const nextSavedEmojiName = $actionSettings.emoji_name ?? "";
+		const nextShowSoundTitle = parseBooleanSetting($actionSettings.show_sound_title, true);
 		const changed =
 			nextSavedSoundId !== savedSoundId ||
 			nextSavedGuildId !== savedGuildId ||
 			nextSavedSoundName !== savedSoundName ||
-			nextSavedEmojiName !== savedEmojiName;
+			nextSavedEmojiName !== savedEmojiName ||
+			nextShowSoundTitle !== showSoundTitle;
 
 		if (changed) {
 			savedSoundId = nextSavedSoundId;
 			savedGuildId = nextSavedGuildId;
 			savedSoundName = nextSavedSoundName;
 			savedEmojiName = nextSavedEmojiName;
+			showSoundTitle = nextShowSoundTitle;
 			draftGuildId = nextSavedGuildId;
 			draftSoundId = nextSavedSoundId;
 			draftSoundName = nextSavedSoundName;
@@ -116,6 +136,7 @@
 			guild_id: savedGuildId,
 			sound_name: savedSoundName,
 			emoji_name: savedEmojiName,
+			show_sound_title: showSoundTitle,
 		});
 	}
 
@@ -208,6 +229,24 @@
 			You are browsing sounds from another server. This button keeps its current assignment until you select a new sound.
 		</div>
 	{/if}
+
+	<div class="mb-4 rounded-lg border border-neutral-600 bg-neutral-800 p-3">
+		<label for="showSoundTitle" class="flex cursor-pointer items-start gap-3">
+			<input
+				id="showSoundTitle"
+				type="checkbox"
+				bind:checked={showSoundTitle}
+				on:change={saveSettings}
+				class="mt-0.5 h-4 w-4 rounded border-neutral-500 bg-neutral-700 text-indigo-500 focus:ring-indigo-500"
+			/>
+			<div>
+				<div class="text-xs font-semibold text-neutral-200">Show sound name on button</div>
+				<p class="mt-1 text-xs text-neutral-400">
+					Uses the Stream Deck title to show the selected sound name under the icon.
+				</p>
+			</div>
+		</label>
+	</div>
 
 	<div class="mb-4 border-t border-neutral-700 pt-4">
 		<h4 class="mb-2 text-xs font-semibold text-neutral-300">Manual Entry (Advanced)</h4>
