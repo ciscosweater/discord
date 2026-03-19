@@ -41,6 +41,7 @@
 	let guildsError: string | null = null;
 	let listener: ((event: Event) => void) | null = null;
 	let guildRequestToken = 0;
+	let soundRefreshToken = 0;
 
 	$: {
 		if ($actionSettings.sound_id !== undefined) {
@@ -63,6 +64,9 @@
 		guilds = detail.guilds ?? [];
 		loadingGuilds = false;
 		guildsError = detail.error ?? null;
+		if (!detail.error && guildId.trim()) {
+			soundRefreshToken += 1;
+		}
 	}
 
 	onMount(() => {
@@ -138,11 +142,19 @@
 				bind:value={guildId}
 				on:change={handleGuildChange}
 				disabled={loadingGuilds || guilds.length === 0}
-				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
+				class="w-full appearance-none rounded-lg border border-neutral-600 px-2 py-1 text-xs focus:border-neutral-600 focus:outline-none"
+				style="background-color: rgb(64 64 64); color: rgb(245 245 245); color-scheme: dark;"
 			>
-				<option value="">Select a server...</option>
+				<option value="" style="background-color: rgb(38 38 38); color: rgb(245 245 245);">
+					Select a server...
+				</option>
 				{#each guilds as guild}
-					<option value={guild.guild_id}>{guild.name}</option>
+					<option
+						value={guild.guild_id}
+						style="background-color: rgb(38 38 38); color: rgb(245 245 245);"
+					>
+						{guild.name}
+					</option>
 				{/each}
 			</select>
 			{#if guildsError}
@@ -154,6 +166,7 @@
 
 		<SoundboardSoundPicker
 			{guildId}
+			{soundRefreshToken}
 			bind:selectedSoundId={soundId}
 			bind:selectedSoundName={soundName}
 		/>

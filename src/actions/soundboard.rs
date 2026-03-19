@@ -52,7 +52,6 @@ async fn request_guilds() -> Result<(), String> {
 		return Err("Discord client not initialized".to_string());
 	};
 
-	log::debug!("Requesting guild list from Discord RPC");
 	client
 		.emit_command(&SentCommand::GetGuilds)
 		.await
@@ -65,7 +64,6 @@ async fn request_soundboard_sounds_for_guild(guild_id: &str) -> Result<(), Strin
 		return Err("Discord client not initialized".to_string());
 	};
 
-	log::debug!("Requesting soundboard sounds for guild {} via Discord RPC", guild_id);
 	client
 		.emit_command(&SentCommand::GetSoundboardSounds(GetSoundboardSoundsArgs {
 			guild_id: guild_id.to_string(),
@@ -94,11 +92,6 @@ async fn send_guilds_response(
 	guilds: Vec<GuildInfo>,
 	error: Option<String>,
 ) -> OpenActionResult<()> {
-	log::debug!(
-		"send_guilds_response sending {} guilds directly to PI, error_present={}",
-		guilds.len(),
-		error.is_some()
-	);
 	let response = GuildsResponse {
 		action: "guilds_result".to_string(),
 		guilds,
@@ -113,12 +106,10 @@ async fn wait_for_guilds(instance: &Instance) -> OpenActionResult<()> {
 	for _ in 0..60 {
 		let guilds = available_soundboard_guilds().read().await.clone();
 		if !guilds.is_empty() {
-			log::debug!("wait_for_guilds found {} cached guilds", guilds.len());
 			return send_guilds_response(instance, guilds, None).await;
 		}
 
 		if let Some(error) = guild_request_error().read().await.clone() {
-			log::debug!("wait_for_guilds saw guild error: {}", error);
 			return send_guilds_response(instance, vec![], Some(error)).await;
 		}
 
@@ -228,8 +219,6 @@ impl Action for PlaySoundboardSoundAction {
 			"nonce": nonce
 		});
 
-		log::debug!("Soundboard payload being sent: {}", payload);
-
 		match client.emit_string(&payload.to_string()).await {
 			Ok(_) => instance.show_ok().await,
 			Err(e) => {
@@ -255,26 +244,21 @@ impl Action for PlaySoundboardSoundAction {
 
 		match payload.action.as_deref() {
 			Some("get_guilds") => {
-				log::debug!("soundboard send_to_plugin handling get_guilds");
 				let guilds = available_soundboard_guilds().read().await.clone();
 				if !guilds.is_empty() {
-					log::debug!("get_guilds found {} cached guilds immediately", guilds.len());
 					send_guilds_response(instance, guilds, None).await?;
 					return Ok(());
 				}
 
 				if let Some(error) = guild_request_error().read().await.clone() {
-					log::debug!("get_guilds found cached guild error: {}", error);
 					send_guilds_response(instance, vec![], Some(error)).await?;
 					return Ok(());
 				}
 
 				if let Err(error) = request_guilds().await {
-					log::debug!("get_guilds request_guilds failed immediately: {}", error);
 					send_guilds_response(instance, vec![], Some(error)).await?;
 					return Ok(());
 				}
-				log::debug!("get_guilds waiting for guild cache");
 				wait_for_guilds(instance).await?;
 				return Ok(());
 			}

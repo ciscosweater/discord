@@ -34,6 +34,7 @@
 	}
 
 	export let guildId: string = "";
+	export let soundRefreshToken: number = 0;
 	export let selectedSoundId: string = "";
 	export let selectedSoundName: string = "";
 
@@ -44,6 +45,7 @@
 	let requestedGuildId = "";
 	let initialized = false;
 	let soundRequestToken = 0;
+	let appliedRefreshToken = -1;
 
 	function handleResponse(data: SoundsResponse) {
 		if (data.action === "sounds_result") {
@@ -102,6 +104,10 @@
 			loading = false;
 			error = "Enter a server ID to see available sounds";
 		} else if (normalizedGuildId !== requestedGuildId) {
+			void requestSounds();
+		} else if (soundRefreshToken !== appliedRefreshToken) {
+			appliedRefreshToken = soundRefreshToken;
+			requestedGuildId = "";
 			void requestSounds();
 		}
 	}
@@ -193,11 +199,17 @@
 			id="soundPicker"
 			bind:value={selectedSoundId}
 			on:change={handleSoundSelect}
-			class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1.5 text-xs text-neutral-100 focus:border-neutral-600 focus:outline-none"
+			class="w-full appearance-none rounded-lg border border-neutral-600 px-2 py-1.5 text-xs focus:border-neutral-600 focus:outline-none"
+			style="background-color: rgb(64 64 64); color: rgb(245 245 245); color-scheme: dark;"
 		>
-			<option value="">Select a sound...</option>
+			<option value="" style="background-color: rgb(38 38 38); color: rgb(245 245 245);">
+				Select a sound...
+			</option>
 			{#each sounds as sound}
-				<option value={sound.sound_id}>
+				<option
+					value={sound.sound_id}
+					style="background-color: rgb(38 38 38); color: rgb(245 245 245);"
+				>
 					{sound.emoji_name ? `${sound.emoji_name} ` : ""}{sound.name}
 				</option>
 			{/each}

@@ -52,11 +52,6 @@ pub fn guild_request_error() -> &'static RwLock<Option<String>> {
 }
 
 async fn broadcast_soundboard_guilds(guilds: Vec<GuildInfo>, error: Option<String>) {
-	log::debug!(
-		"Broadcasting {} soundboard guilds to PI, error_present={}",
-		guilds.len(),
-		error.is_some()
-	);
 	*available_soundboard_guilds().write().await = guilds.clone();
 	*guild_request_error().write().await = error.clone();
 
@@ -75,8 +70,6 @@ async fn broadcast_soundboard_guilds(guilds: Vec<GuildInfo>, error: Option<Strin
 	for instance in visible_instances(PlaySoundboardSoundAction::UUID).await {
 		if let Err(error) = instance.send_to_property_inspector(&payload).await {
 			log::error!("Failed to forward guild list to PI: {}", error);
-		} else {
-			log::debug!("Broadcasted guild list payload to a visible PI instance");
 		}
 	}
 }
@@ -101,16 +94,10 @@ async fn broadcast_soundboard_response(
 	};
 
 	if let Some(guild_id) = cache_guild_id {
-		log::debug!(
-			"Received {} soundboard sounds for guild {}",
-			filtered_sounds.len(),
-			guild_id
-		);
 		soundboard_sounds()
 			.write()
 			.await
 			.insert(guild_id.clone(), filtered_sounds.clone());
-		log::debug!("Stored soundboard sounds for guild {}", guild_id);
 	}
 
 	let response = SoundsResponse {
@@ -384,10 +371,6 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				sync_voice_channel_subscriptions(channel.map(|channel| channel.id)).await;
 			}
 			ReturnedCommand::GetGuilds(data) => {
-				log::debug!(
-					"handle_rpc_event received GetGuilds with {} guilds",
-					data.guilds.len()
-				);
 				let mut guilds: Vec<GuildInfo> = data
 					.guilds
 					.into_iter()
