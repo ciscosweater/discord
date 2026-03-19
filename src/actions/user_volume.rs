@@ -3,7 +3,7 @@ use crate::rpc_events::{current_voice_participant, current_voice_participants};
 
 use std::collections::HashMap;
 
-use discord_ipc_rust::models::send::commands::{SetUserVoiceSettingsArgs, SentCommand};
+use discord_ipc_rust::models::send::commands::{SentCommand, SetUserVoiceSettingsArgs};
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 
 #[derive(Debug, serde::Deserialize)]
@@ -67,7 +67,10 @@ impl Action for UserVolumeControlButtonAction {
 		log::debug!("UserVolumeControlButton settings: {:?}", settings);
 
 		let user_id = settings.get("user_id").cloned();
-		let mode = settings.get("mode").cloned().unwrap_or_else(|| "mute".to_string());
+		let mode = settings
+			.get("mode")
+			.cloned()
+			.unwrap_or_else(|| "mute".to_string());
 		let mute_type = settings
 			.get("mute_type")
 			.cloned()
@@ -79,7 +82,12 @@ impl Action for UserVolumeControlButtonAction {
 			return Ok(());
 		};
 
-		log::debug!("UserVolumeControlButton: user_id={}, mode={}, mute_type={}", user_id, mode, mute_type);
+		log::debug!(
+			"UserVolumeControlButton: user_id={}, mode={}, mute_type={}",
+			user_id,
+			mode,
+			mute_type
+		);
 
 		match mode.as_str() {
 			"mute" => {
@@ -209,10 +217,17 @@ impl Action for UserVolumeControlDialAction {
 		ticks: i16,
 		_pressed: bool,
 	) -> OpenActionResult<()> {
-		log::debug!("UserVolumeControlDial settings: {:?}, ticks={}", settings, ticks);
+		log::debug!(
+			"UserVolumeControlDial settings: {:?}, ticks={}",
+			settings,
+			ticks
+		);
 
 		let user_id = settings.get("user_id").cloned();
-		let mode = settings.get("mode").cloned().unwrap_or_else(|| "adjust".to_string());
+		let mode = settings
+			.get("mode")
+			.cloned()
+			.unwrap_or_else(|| "adjust".to_string());
 
 		let Some(user_id) = user_id else {
 			log::error!("No user_id provided in settings");
@@ -265,11 +280,18 @@ impl Action for UserVolumeControlDialAction {
 		}
 	}
 
-	async fn dial_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+	async fn dial_up(
+		&self,
+		instance: &Instance,
+		settings: &Self::Settings,
+	) -> OpenActionResult<()> {
 		log::debug!("UserVolumeControlDial press settings: {:?}", settings);
 
 		let user_id = settings.get("user_id").cloned();
-		let mode = settings.get("mode").cloned().unwrap_or_else(|| "adjust".to_string());
+		let mode = settings
+			.get("mode")
+			.cloned()
+			.unwrap_or_else(|| "adjust".to_string());
 
 		let Some(user_id) = user_id else {
 			log::error!("No user_id provided in settings");

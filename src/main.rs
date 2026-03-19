@@ -48,10 +48,12 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
 		let settings: DiscordSettings =
 			serde_json::from_value(event.payload.settings).unwrap_or_default();
 
-		log::info!("did_receive_global_settings: client_id present={} client_secret present={} access_token present={}",
+		log::info!(
+			"did_receive_global_settings: client_id present={} client_secret present={} access_token present={}",
 			!settings.client_id.is_empty(),
 			!settings.client_secret.is_empty(),
-			!settings.access_token.is_empty());
+			!settings.access_token.is_empty()
+		);
 
 		// Only react when the stored settings actually changed so we can avoid reconnect churn.
 		let current = current_settings().read().await;
