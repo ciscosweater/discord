@@ -406,7 +406,8 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 async fn apply_voice_state(mute: Option<bool>, deaf: Option<bool>) {
 	let mute = mute.unwrap_or(false);
 	let deaf = deaf.unwrap_or(false);
-	update_action_state(crate::actions::ToggleMuteAction::UUID, mute).await;
+	let effective_mute = mute || deaf;
+	update_action_state(crate::actions::ToggleMuteAction::UUID, effective_mute).await;
 	update_action_state(crate::actions::ToggleDeafenAction::UUID, deaf).await;
 }
 
