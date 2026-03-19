@@ -1,19 +1,17 @@
+use crate::actions::{
+	ChannelsResponse, GuildInfo, SoundInfo, SoundsResponse, UserVolumeControlButtonAction,
+	UserVolumeControlDialAction, VoiceChannelInfo,
+};
 use crate::client::discord_client;
 use crate::client::schedule_reconnect;
 use crate::current_settings;
-use crate::{
-	actions::{
-		GuildInfo, SoundInfo, SoundsResponse, UserVolumeControlButtonAction,
-		UserVolumeControlDialAction,
-	},
-};
 
 use discord_ipc_rust::models::receive::{
 	CommandResponse, ReceivedItem, commands::ReturnedCommand, events::ReturnedEvent,
 };
 use discord_ipc_rust::models::send::commands::{GetChannelArgs, SentCommand};
 use discord_ipc_rust::models::send::events::SubscribeableEvent;
-use discord_ipc_rust::models::shared::Channel;
+use discord_ipc_rust::models::shared::{Channel, ChannelType};
 use discord_ipc_rust::models::soundboard::SoundboardSound;
 use openaction::{Action as _, ActionUuid, get_instance, set_global_settings, visible_instances};
 
@@ -33,17 +31,12 @@ pub struct PendingSoundboardRequest {
 	pub guild_id: String,
 }
 
-pub fn pending_soundboard_requests(
-) -> &'static RwLock<HashMap<String, PendingSoundboardRequest>> {
+pub fn pending_soundboard_requests() -> &'static RwLock<HashMap<String, PendingSoundboardRequest>> {
 	static REQUESTS: OnceLock<RwLock<HashMap<String, PendingSoundboardRequest>>> = OnceLock::new();
 	REQUESTS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-pub async fn register_pending_soundboard_request(
-	nonce: &str,
-	instance_id: &str,
-	guild_id: &str,
-) {
+pub async fn register_pending_soundboard_request(nonce: &str, instance_id: &str, guild_id: &str) {
 	pending_soundboard_requests().write().await.insert(
 		nonce.to_string(),
 		PendingSoundboardRequest {
@@ -63,6 +56,43 @@ pub async fn clear_pending_soundboard_requests() {
 	pending_soundboard_requests().write().await.clear();
 }
 
+#[derive(Clone, Debug)]
+pub struct PendingVoiceChannelRequest {
+	pub instance_id: String,
+	pub guild_id: String,
+}
+
+pub fn pending_voice_channel_requests()
+-> &'static RwLock<HashMap<String, PendingVoiceChannelRequest>> {
+	static REQUESTS: OnceLock<RwLock<HashMap<String, PendingVoiceChannelRequest>>> =
+		OnceLock::new();
+	REQUESTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub async fn register_pending_voice_channel_request(
+	nonce: &str,
+	instance_id: &str,
+	guild_id: &str,
+) {
+	pending_voice_channel_requests().write().await.insert(
+		nonce.to_string(),
+		PendingVoiceChannelRequest {
+			instance_id: instance_id.to_string(),
+			guild_id: guild_id.to_string(),
+		},
+	);
+}
+
+pub async fn unregister_pending_voice_channel_request(
+	nonce: &str,
+) -> Option<PendingVoiceChannelRequest> {
+	pending_voice_channel_requests().write().await.remove(nonce)
+}
+
+pub async fn clear_pending_voice_channel_requests() {
+	pending_voice_channel_requests().write().await.clear();
+}
+
 pub fn soundboard_request_error() -> &'static RwLock<Option<String>> {
 	static REQUEST_ERROR: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 	REQUEST_ERROR.get_or_init(|| RwLock::new(None))
@@ -78,9 +108,110 @@ pub fn guild_request_error() -> &'static RwLock<Option<String>> {
 	REQUEST_ERROR.get_or_init(|| RwLock::new(None))
 }
 
+pub fn voice_channels() -> &'static RwLock<HashMap<String, Vec<VoiceChannelInfo>>> {
+	static CHANNELS: OnceLock<RwLock<HashMap<String, Vec<VoiceChannelInfo>>>> = OnceLock::new();
+	CHANNELS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn voice_channel_request_error() -> &'static RwLock<Option<String>> {
+	static REQUEST_ERROR: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+	REQUEST_ERROR.get_or_init(|| RwLock::new(None))
+}
+
 async fn broadcast_soundboard_guilds(guilds: Vec<GuildInfo>, error: Option<String>) {
 	*available_soundboard_guilds().write().await = guilds.clone();
 	*guild_request_error().write().await = error.clone();
+}
+
+fn filter_voice_channels(
+	requested_guild_id: Option<&str>,
+	channels: Vec<Channel>,
+) -> (Option<String>, Vec<VoiceChannelInfo>) {
+	let cache_guild_id = requested_guild_id
+		.map(str::to_string)
+		.or_else(|| channels.first().and_then(|first| first.guild_id.clone()));
+	let filtered_channels = channels
+		.into_iter()
+		.filter(|channel| {
+			matches!(
+				channel.channel_type,
+				ChannelType::GuildVoice | ChannelType::GuildStageVoice
+			)
+		})
+		.map(|channel| VoiceChannelInfo {
+			channel_id: channel.id.clone(),
+			name: channel
+				.name
+				.as_deref()
+				.map(str::trim)
+				.filter(|name| !name.is_empty())
+				.map(str::to_string)
+				.unwrap_or(channel.id),
+		})
+		.collect();
+	(cache_guild_id, filtered_channels)
+}
+
+async fn cache_voice_channels_response(
+	requested_guild_id: Option<String>,
+	channels: Vec<Channel>,
+	error: Option<String>,
+) -> Vec<VoiceChannelInfo> {
+	let (cache_guild_id, filtered_channels) =
+		filter_voice_channels(requested_guild_id.as_deref(), channels);
+	if let Some(guild_id) = cache_guild_id {
+		voice_channels()
+			.write()
+			.await
+			.insert(guild_id, filtered_channels.clone());
+	}
+
+	*voice_channel_request_error().write().await = None;
+	if let Some(error) = error {
+		*voice_channel_request_error().write().await = Some(error);
+	}
+
+	filtered_channels
+}
+
+async fn send_voice_channels_response_to_instance(
+	instance_id: &str,
+	guild_id: &str,
+	channels: &[VoiceChannelInfo],
+	error: Option<String>,
+) {
+	let Some(instance) = get_instance(instance_id.to_string()).await else {
+		log::debug!(
+			"Skipping direct voice channel response for missing instance {}",
+			instance_id
+		);
+		return;
+	};
+
+	let payload = match serde_json::to_string(&ChannelsResponse {
+		action: "channels_result".to_string(),
+		guild_id: guild_id.to_string(),
+		channels: channels.to_vec(),
+		error,
+	}) {
+		Ok(payload) => payload,
+		Err(error) => {
+			log::error!(
+				"Failed to serialize direct voice channel response for instance {}: {}",
+				instance_id,
+				error
+			);
+			return;
+		}
+	};
+
+	if let Err(error) = instance.send_to_property_inspector(&payload).await {
+		log::error!(
+			"Failed to send direct voice channel response to instance {}: {}",
+			instance_id,
+			error
+		);
+	}
 }
 
 fn filter_soundboard_sounds(
@@ -88,15 +219,13 @@ fn filter_soundboard_sounds(
 	sounds: Vec<SoundboardSound>,
 ) -> (Option<String>, Vec<SoundboardSound>) {
 	let cache_guild_id = requested_guild_id.map(str::to_string).or_else(|| {
-		sounds
-			.first()
-			.map(|first| {
-				if first.guild_id == "0" {
-					"DEFAULT".to_string()
-				} else {
-					first.guild_id.clone()
-				}
-			})
+		sounds.first().map(|first| {
+			if first.guild_id == "0" {
+				"DEFAULT".to_string()
+			} else {
+				first.guild_id.clone()
+			}
+		})
 	});
 	let filtered_sounds = match requested_guild_id {
 		Some("DEFAULT") => sounds
@@ -575,6 +704,8 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 					if let Err(e) = set_global_settings(&*current).await {
 						log::error!("Failed to clear access token in settings: {}", e);
 					}
+					clear_pending_soundboard_requests().await;
+					clear_pending_voice_channel_requests().await;
 					schedule_reconnect();
 				}
 			}
@@ -672,7 +803,9 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 						Some(nonce) => unregister_pending_soundboard_request(nonce).await,
 						None => None,
 					};
-					let requested_guild_id = pending_request.as_ref().map(|request| request.guild_id.clone());
+					let requested_guild_id = pending_request
+						.as_ref()
+						.map(|request| request.guild_id.clone());
 					let filtered_sounds =
 						cache_soundboard_response(requested_guild_id, sounds, None).await;
 					if let Some(request) = pending_request {
@@ -685,12 +818,34 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 						.await;
 					}
 				}
+				ReturnedCommand::GetChannels(channels) => {
+					let pending_request = match nonce.as_deref() {
+						Some(nonce) => unregister_pending_voice_channel_request(nonce).await,
+						None => None,
+					};
+					let requested_guild_id = pending_request
+						.as_ref()
+						.map(|request| request.guild_id.clone());
+					let filtered_channels =
+						cache_voice_channels_response(requested_guild_id, channels, None).await;
+					if let Some(request) = pending_request {
+						send_voice_channels_response_to_instance(
+							&request.instance_id,
+							&request.guild_id,
+							&filtered_channels,
+							None,
+						)
+						.await;
+					}
+				}
 				_ => {}
 			}
 		}
 		ReceivedItem::SocketClosed => {
 			log::warn!("Discord closed; attempting to reconnect");
 			clear_voice_participants().await;
+			clear_pending_soundboard_requests().await;
+			clear_pending_voice_channel_requests().await;
 			schedule_reconnect();
 		}
 	}
@@ -715,7 +870,8 @@ async fn update_action_state(action_uuid: ActionUuid, active: bool) {
 
 #[cfg(test)]
 mod tests {
-	use super::VoiceParticipant;
+	use super::{VoiceParticipant, filter_voice_channels};
+	use discord_ipc_rust::models::shared::{Channel, ChannelType};
 
 	#[test]
 	fn effective_mute_is_false_when_all_flags_are_false() {
@@ -738,5 +894,59 @@ mod tests {
 				flags.0, flags.1, flags.2, flags.3, flags.4, flags.5
 			));
 		}
+	}
+
+	#[test]
+	fn filter_voice_channels_keeps_only_voice_and_stage() {
+		let channels = vec![
+			Channel {
+				id: "text".to_string(),
+				channel_type: ChannelType::GuildText,
+				guild_id: Some("guild".to_string()),
+				position: None,
+				name: Some("general".to_string()),
+				topic: None,
+				nsfw: None,
+				last_message_id: None,
+				bitrate: None,
+				user_limit: None,
+				rate_limit_per_user: None,
+				voice_states: None,
+			},
+			Channel {
+				id: "voice".to_string(),
+				channel_type: ChannelType::GuildVoice,
+				guild_id: Some("guild".to_string()),
+				position: None,
+				name: Some("Standup".to_string()),
+				topic: None,
+				nsfw: None,
+				last_message_id: None,
+				bitrate: None,
+				user_limit: None,
+				rate_limit_per_user: None,
+				voice_states: None,
+			},
+			Channel {
+				id: "stage".to_string(),
+				channel_type: ChannelType::GuildStageVoice,
+				guild_id: Some("guild".to_string()),
+				position: None,
+				name: Some("Town Hall".to_string()),
+				topic: None,
+				nsfw: None,
+				last_message_id: None,
+				bitrate: None,
+				user_limit: None,
+				rate_limit_per_user: None,
+				voice_states: None,
+			},
+		];
+
+		let (guild_id, filtered) = filter_voice_channels(Some("guild"), channels);
+		assert_eq!(guild_id.as_deref(), Some("guild"));
+		assert_eq!(filtered.len(), 2);
+		assert_eq!(filtered[0].channel_id, "voice");
+		assert_eq!(filtered[1].channel_id, "stage");
 	}
 }

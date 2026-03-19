@@ -79,7 +79,7 @@
       "Controllers": ["Keypad"],
       "PropertyInspectorPath": "pi/voicechannel.html",
       "DisableAutomaticStates": true,
-      "States": [{ "Image": "actions/voicechannel_0" }]
+      "States": [{ "Image": "actions/voicechannel_0", "TitleAlignment": "top" }]
     },
     {
       "UUID": "me.amankhanna.oadiscord.leavevoicechannel",
