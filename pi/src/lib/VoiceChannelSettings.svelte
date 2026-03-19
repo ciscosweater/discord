@@ -5,6 +5,7 @@
 	interface GuildInfo {
 		guild_id: string;
 		name: string;
+		icon_hash?: string;
 	}
 
 	interface VoiceChannelInfo {
@@ -61,6 +62,7 @@
 	}
 
 	let savedGuildId = "";
+	let savedGuildIconHash = "";
 	let savedChannelId = "";
 	let savedChannelName = "";
 	let savedShowChannelTitle = true;
@@ -84,17 +86,20 @@
 
 	$: {
 		const nextSavedGuildId = $actionSettings.guild_id ?? "";
+		const nextSavedGuildIconHash = $actionSettings.guild_icon_hash ?? "";
 		const nextSavedChannelId = $actionSettings.channel_id ?? "";
 		const nextSavedChannelName = $actionSettings.channel_name ?? "";
 		const nextShowChannelTitle = parseBooleanSetting($actionSettings.show_channel_title, true);
 		const changed =
 			nextSavedGuildId !== savedGuildId ||
+			nextSavedGuildIconHash !== savedGuildIconHash ||
 			nextSavedChannelId !== savedChannelId ||
 			nextSavedChannelName !== savedChannelName ||
 			nextShowChannelTitle !== savedShowChannelTitle;
 
 		if (changed) {
 			savedGuildId = nextSavedGuildId;
+			savedGuildIconHash = nextSavedGuildIconHash;
 			savedChannelId = nextSavedChannelId;
 			savedChannelName = nextSavedChannelName;
 			savedShowChannelTitle = nextShowChannelTitle;
@@ -156,6 +161,7 @@
 	function saveSettings() {
 		sendToPlugin({
 			guild_id: savedGuildId,
+			guild_icon_hash: savedGuildIconHash,
 			channel_id: savedChannelId,
 			channel_name: savedChannelName,
 			show_channel_title: showChannelTitle,
@@ -205,14 +211,21 @@
 
 	function handleChannelChange() {
 		const selected = channels.find((channel) => channel.channel_id === draftChannelId);
+		const selectedGuild = guilds.find((guild) => guild.guild_id === draftGuildId);
 		if (!selected) {
 			return;
 		}
 
 		savedGuildId = draftGuildId;
+		savedGuildIconHash = selectedGuild?.icon_hash ?? "";
 		savedChannelId = selected.channel_id;
 		savedChannelName = selected.name;
 		draftChannelName = selected.name;
+		saveSettings();
+	}
+
+	function handleManualGuildIdChange() {
+		savedGuildIconHash = "";
 		saveSettings();
 	}
 </script>
@@ -355,7 +368,7 @@
 				id="guildId"
 				type="text"
 				bind:value={savedGuildId}
-				on:change={saveSettings}
+				on:change={handleManualGuildIdChange}
 				placeholder="Discord server ID (snowflake)"
 				class="w-full rounded-lg border border-neutral-600 bg-neutral-700 px-2 py-1 text-xs text-neutral-100 placeholder-neutral-500 focus:border-neutral-600 focus:outline-none"
 			/>

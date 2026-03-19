@@ -123,6 +123,22 @@ async fn broadcast_soundboard_guilds(guilds: Vec<GuildInfo>, error: Option<Strin
 	*guild_request_error().write().await = error.clone();
 }
 
+fn guild_icon_hash_from_url(icon_url: Option<&str>) -> Option<String> {
+	let icon_url = icon_url?.trim();
+	if icon_url.is_empty() {
+		return None;
+	}
+
+	let path = icon_url.split('?').next().unwrap_or(icon_url);
+	let filename = path.rsplit('/').next()?;
+	let hash = filename.split('.').next()?.trim();
+	if hash.is_empty() {
+		return None;
+	}
+
+	Some(hash.to_string())
+}
+
 fn filter_voice_channels(
 	requested_guild_id: Option<&str>,
 	channels: Vec<Channel>,
@@ -784,6 +800,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 						.map(|guild| GuildInfo {
 							guild_id: guild.id,
 							name: guild.name,
+							icon_hash: guild_icon_hash_from_url(guild.icon_url.as_deref()),
 						})
 						.collect();
 					guilds.sort_by(|left, right| {
@@ -794,6 +811,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 						GuildInfo {
 							guild_id: "DEFAULT".to_string(),
 							name: "Discord Default Sounds".to_string(),
+							icon_hash: None,
 						},
 					);
 					broadcast_soundboard_guilds(guilds, None).await;

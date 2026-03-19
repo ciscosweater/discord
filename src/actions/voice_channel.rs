@@ -5,7 +5,11 @@ use crate::rpc_events::{
 	voice_channel_request_error, voice_channels,
 };
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 
 use discord_ipc_rust::models::send::commands::{
@@ -13,12 +17,14 @@ use discord_ipc_rust::models::send::commands::{
 };
 use openaction::{Action, ActionUuid, Instance, OpenActionResult, async_trait};
 use tokio::sync::RwLock;
+use tokio::task;
 use tokio::time::{Duration, sleep};
 
 #[derive(Debug, serde::Deserialize)]
 struct VoiceChannelPayload {
 	action: Option<String>,
 	guild_id: Option<String>,
+	guild_icon_hash: Option<String>,
 	channel_id: Option<String>,
 	channel_name: Option<String>,
 	show_channel_title: Option<bool>,
@@ -78,10 +84,285 @@ fn channel_title_enabled(settings: &HashMap<String, String>) -> bool {
 		.unwrap_or(true)
 }
 
+fn fallback_join_voice_channel_image() -> &'static str {
+	"actions/voicechannel_0"
+}
+
+fn plugin_actions_dir() -> Option<PathBuf> {
+	let exe_path = std::env::current_exe().ok()?;
+	let exe_dir = exe_path.parent()?.to_path_buf();
+	Some(exe_dir.join("actions"))
+}
+
+fn ensure_generated_dir(actions_dir: &Path) -> Option<PathBuf> {
+	let generated_dir = actions_dir.join("generated");
+	if let Err(error) = fs::create_dir_all(&generated_dir) {
+		log::error!(
+			"Failed to create generated dir {}: {}",
+			generated_dir.display(),
+			error
+		);
+		return None;
+	}
+	Some(generated_dir)
+}
+
+fn guild_icon_image_filename(guild_id: &str, icon_hash: &str) -> String {
+	let mut hasher = DefaultHasher::new();
+	"join_voice_guild_icon_v2".hash(&mut hasher);
+	guild_id.hash(&mut hasher);
+	icon_hash.hash(&mut hasher);
+	format!("join_voice_guild_{:016x}.png", hasher.finish())
+}
+
+fn guild_icon_cache_filename(guild_id: &str, icon_hash: &str) -> String {
+	let mut hasher = DefaultHasher::new();
+	"guild_icon_cache_v2".hash(&mut hasher);
+	guild_id.hash(&mut hasher);
+	icon_hash.hash(&mut hasher);
+	format!("guild_icon_{:016x}.png", hasher.finish())
+}
+
+async fn cached_guild_icon_path(guild_id: &str, icon_hash: &str) -> Option<PathBuf> {
+	let actions_dir = plugin_actions_dir()?;
+	let generated_dir = ensure_generated_dir(&actions_dir)?;
+	let icon_path = generated_dir.join(guild_icon_cache_filename(guild_id, icon_hash));
+	if icon_path.exists() {
+		return Some(icon_path);
+	}
+
+	let url = format!(
+		"https://cdn.discordapp.com/icons/{}/{}.png?size=128",
+		guild_id, icon_hash
+	);
+	let response = match reqwest::get(&url).await {
+		Ok(response) => response,
+		Err(error) => {
+			log::warn!("Failed to fetch guild icon for {}: {}", guild_id, error);
+			return None;
+		}
+	};
+	let response = match response.error_for_status() {
+		Ok(response) => response,
+		Err(error) => {
+			log::warn!(
+				"Discord CDN returned an error for guild icon {}: {}",
+				guild_id,
+				error
+			);
+			return None;
+		}
+	};
+	let bytes = match response.bytes().await {
+		Ok(bytes) => bytes,
+		Err(error) => {
+			log::warn!(
+				"Failed to read guild icon bytes for {}: {}",
+				guild_id,
+				error
+			);
+			return None;
+		}
+	};
+	if let Err(error) = fs::write(&icon_path, bytes.as_ref()) {
+		log::warn!(
+			"Failed to write guild icon cache {}: {}",
+			icon_path.display(),
+			error
+		);
+		return None;
+	}
+
+	Some(icon_path)
+}
+
+fn guild_icon_hash_from_cached_guilds(guild_id: &str, guilds: &[GuildInfo]) -> Option<String> {
+	guilds
+		.iter()
+		.find(|guild| guild.guild_id == guild_id)
+		.and_then(|guild| guild.icon_hash.as_deref())
+		.map(str::trim)
+		.filter(|hash| !hash.is_empty())
+		.map(str::to_string)
+}
+
+async fn resolved_guild_icon_hash(settings: &HashMap<String, String>) -> Option<String> {
+	if let Some(icon_hash) = settings
+		.get("guild_icon_hash")
+		.map(String::as_str)
+		.map(str::trim)
+		.filter(|hash| !hash.is_empty())
+	{
+		return Some(icon_hash.to_string());
+	}
+
+	let guild_id = settings
+		.get("guild_id")
+		.map(String::as_str)
+		.map(str::trim)
+		.filter(|guild_id| !guild_id.is_empty())?;
+	let guilds = available_soundboard_guilds().read().await;
+	guild_icon_hash_from_cached_guilds(guild_id, &guilds)
+}
+
+fn compose_guild_icon_image(icon_path: &Path, guild_id: &str, icon_hash: &str) -> Option<String> {
+	let actions_dir = plugin_actions_dir()?;
+	let generated_dir = ensure_generated_dir(&actions_dir)?;
+	let filename = guild_icon_image_filename(guild_id, icon_hash);
+	let output_path = generated_dir.join(&filename);
+	let image_path = format!("actions/generated/{}", filename.trim_end_matches(".png"));
+	if output_path.exists() {
+		return Some(image_path);
+	}
+
+	let blank_svg_path = actions_dir.join("blank.svg");
+	let temp_icon_path = generated_dir.join(format!(
+		"join_voice_guild_icon_masked_{}.png",
+		uuid::Uuid::new_v4()
+	));
+	let temp_frame_path = generated_dir.join(format!(
+		"join_voice_guild_icon_frame_{}.png",
+		uuid::Uuid::new_v4()
+	));
+
+	let icon_mask = Command::new("convert")
+		.arg(icon_path)
+		.arg("-resize")
+		.arg("92x92^")
+		.arg("-gravity")
+		.arg("center")
+		.arg("-crop")
+		.arg("92x92+0+0")
+		.arg("+repage")
+		.arg("(")
+		.arg("-size")
+		.arg("92x92")
+		.arg("xc:none")
+		.arg("-fill")
+		.arg("white")
+		.arg("-draw")
+		.arg("roundrectangle 0,0 91,91 12,12")
+		.arg(")")
+		.arg("-alpha")
+		.arg("off")
+		.arg("-compose")
+		.arg("CopyOpacity")
+		.arg("-composite")
+		.arg(format!("png32:{}", temp_icon_path.display()))
+		.output();
+	match icon_mask {
+		Ok(output) if output.status.success() => {}
+		Ok(output) => {
+			log::error!(
+				"Failed to mask guild icon {}: status={} stderr={}",
+				icon_path.display(),
+				output.status,
+				String::from_utf8_lossy(&output.stderr)
+			);
+			return None;
+		}
+		Err(error) => {
+			log::error!("Failed to start convert for guild icon mask: {}", error);
+			return None;
+		}
+	}
+
+	let frame_render = Command::new("convert")
+		.arg("-size")
+		.arg("120x120")
+		.arg("xc:none")
+		.arg("-stroke")
+		.arg("white")
+		.arg("-strokewidth")
+		.arg("4")
+		.arg("-fill")
+		.arg("none")
+		.arg("-draw")
+		.arg("roundrectangle 8,8 111,111 13,13")
+		.arg(format!("png32:{}", temp_frame_path.display()))
+		.output();
+	match frame_render {
+		Ok(output) if output.status.success() => {}
+		Ok(output) => {
+			log::error!(
+				"Failed to render guild icon frame: status={} stderr={}",
+				output.status,
+				String::from_utf8_lossy(&output.stderr)
+			);
+			let _ = fs::remove_file(&temp_icon_path);
+			return None;
+		}
+		Err(error) => {
+			log::error!("Failed to start convert for guild icon frame: {}", error);
+			let _ = fs::remove_file(&temp_icon_path);
+			return None;
+		}
+	}
+
+	let compose = Command::new("convert")
+		.arg(&blank_svg_path)
+		.arg(&temp_icon_path)
+		.arg("-gravity")
+		.arg("center")
+		.arg("-geometry")
+		.arg("+0+0")
+		.arg("-composite")
+		.arg(&temp_frame_path)
+		.arg("-gravity")
+		.arg("center")
+		.arg("-geometry")
+		.arg("+0+0")
+		.arg("-composite")
+		.arg(&output_path)
+		.output();
+	let result = match compose {
+		Ok(output) if output.status.success() => Some(image_path),
+		Ok(output) => {
+			log::error!(
+				"Failed to compose guild icon image {}: status={} stderr={}",
+				output_path.display(),
+				output.status,
+				String::from_utf8_lossy(&output.stderr)
+			);
+			None
+		}
+		Err(error) => {
+			log::error!(
+				"Failed to start convert for guild icon composition: {}",
+				error
+			);
+			None
+		}
+	};
+
+	let _ = fs::remove_file(&temp_icon_path);
+	let _ = fs::remove_file(&temp_frame_path);
+	result
+}
+
+async fn render_join_voice_channel_image(settings: &HashMap<String, String>) -> Option<String> {
+	let guild_id = settings
+		.get("guild_id")
+		.map(String::as_str)
+		.map(str::trim)
+		.filter(|guild_id| !guild_id.is_empty())?
+		.to_string();
+	let icon_hash = resolved_guild_icon_hash(settings).await?;
+	let icon_path = cached_guild_icon_path(&guild_id, &icon_hash).await?;
+	task::spawn_blocking(move || compose_guild_icon_image(&icon_path, &guild_id, &icon_hash))
+		.await
+		.ok()
+		.flatten()
+}
+
 async fn update_join_voice_channel_button(
 	instance: &Instance,
 	settings: &HashMap<String, String>,
 ) -> OpenActionResult<()> {
+	let image = render_join_voice_channel_image(settings)
+		.await
+		.unwrap_or_else(|| fallback_join_voice_channel_image().to_string());
+	instance.set_image(Some(image), None).await?;
 	let title = if channel_title_enabled(settings) {
 		settings
 			.get("channel_name")
@@ -359,6 +640,9 @@ impl Action for SelectVoiceChannelAction {
 		if let Some(guild_id) = payload.guild_id {
 			new_settings.insert("guild_id".to_string(), guild_id);
 		}
+		if let Some(guild_icon_hash) = payload.guild_icon_hash {
+			new_settings.insert("guild_icon_hash".to_string(), guild_icon_hash);
+		}
 		if let Some(channel_id) = payload.channel_id {
 			new_settings.insert("channel_id".to_string(), channel_id);
 		}
@@ -408,7 +692,10 @@ impl Action for LeaveVoiceChannelAction {
 
 #[cfg(test)]
 mod tests {
-	use super::channel_title_enabled;
+	use super::{
+		channel_title_enabled, guild_icon_hash_from_cached_guilds, guild_icon_image_filename,
+	};
+	use crate::actions::GuildInfo;
 	use std::collections::HashMap;
 
 	#[test]
@@ -421,5 +708,35 @@ mod tests {
 		let mut settings = HashMap::new();
 		settings.insert("show_channel_title".to_string(), "false".to_string());
 		assert!(!channel_title_enabled(&settings));
+	}
+
+	#[test]
+	fn guild_icon_image_filename_changes_with_icon_hash() {
+		let first = guild_icon_image_filename("1", "icon-a");
+		let second = guild_icon_image_filename("1", "icon-b");
+		assert_ne!(first, second);
+	}
+
+	#[test]
+	fn guild_icon_hash_from_cached_guilds_returns_matching_hash() {
+		let guilds = vec![
+			GuildInfo {
+				guild_id: "1".to_string(),
+				name: "Alpha".to_string(),
+				icon_hash: Some("hash-a".to_string()),
+			},
+			GuildInfo {
+				guild_id: "2".to_string(),
+				name: "Beta".to_string(),
+				icon_hash: None,
+			},
+		];
+
+		assert_eq!(
+			guild_icon_hash_from_cached_guilds("1", &guilds),
+			Some("hash-a".to_string())
+		);
+		assert_eq!(guild_icon_hash_from_cached_guilds("2", &guilds), None);
+		assert_eq!(guild_icon_hash_from_cached_guilds("3", &guilds), None);
 	}
 }

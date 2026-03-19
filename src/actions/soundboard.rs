@@ -49,6 +49,8 @@ pub(crate) struct SoundsResponse {
 pub(crate) struct GuildInfo {
 	pub(crate) guild_id: String,
 	pub(crate) name: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(crate) icon_hash: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -570,10 +572,7 @@ impl Action for PlaySoundboardSoundAction {
 			new_settings.insert("emoji_name".to_string(), emoji_name);
 		}
 		if let Some(show_sound_title) = payload.show_sound_title {
-			new_settings.insert(
-				"show_sound_title".to_string(),
-				show_sound_title.to_string(),
-			);
+			new_settings.insert("show_sound_title".to_string(), show_sound_title.to_string());
 		}
 
 		if !new_settings.is_empty() {
