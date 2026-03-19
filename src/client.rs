@@ -21,6 +21,32 @@ pub fn discord_client() -> &'static RwLock<Option<DiscordIpcClient>> {
 	CLIENT.get_or_init(|| RwLock::new(None))
 }
 
+#[derive(Clone, Debug)]
+pub struct AuthenticatedUser {
+	pub user_id: String,
+	pub username: String,
+	pub avatar_hash: Option<String>,
+}
+
+pub fn authenticated_user() -> &'static RwLock<Option<AuthenticatedUser>> {
+	static USER: OnceLock<RwLock<Option<AuthenticatedUser>>> = OnceLock::new();
+	USER.get_or_init(|| RwLock::new(None))
+}
+
+pub async fn current_authenticated_user() -> Option<AuthenticatedUser> {
+	authenticated_user().read().await.clone()
+}
+
+pub async fn set_authenticated_user(user: AuthenticatedUser) {
+	*authenticated_user().write().await = Some(user);
+	crate::actions::refresh_user_stats_instances().await;
+}
+
+pub async fn clear_authenticated_user() {
+	*authenticated_user().write().await = None;
+	crate::actions::refresh_user_stats_instances().await;
+}
+
 // Store the latest error message in the global settings so the UI can surface it.
 pub async fn update_error(error: &str) {
 	let mut current = current_settings().write().await;
@@ -54,6 +80,7 @@ async fn reinitialize() {
 		}
 		Err(e) => {
 			*discord_client().write().await = None;
+			clear_authenticated_user().await;
 			log::error!("Failed to reinitialize client: {}", e);
 			update_error(&e).await;
 		}
@@ -144,6 +171,12 @@ async fn create_discord_client(settings: &DiscordSettings) -> Result<DiscordIpcC
 		.await
 		.map_err(|e| format!("Failed to connect to Discord: {}", e))?;
 	log::info!("Connected to Discord as {}", user.username);
+	set_authenticated_user(AuthenticatedUser {
+		user_id: user.id,
+		username: user.username,
+		avatar_hash: user.avatar,
+	})
+	.await;
 
 	if !settings.access_token.is_empty() {
 		setup_discord_client(&mut rpc, settings.access_token.clone()).await?;

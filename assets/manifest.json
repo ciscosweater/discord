@@ -101,6 +101,16 @@
       "States": [{ "Image": "actions/userVolumeControl" }]
     },
     {
+      "UUID": "me.amankhanna.oadiscord.userstats",
+      "Name": "User Stats",
+      "Icon": "actions/serverStats",
+      "Tooltip": "Show authenticated user stats and notifications",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi/userstats.html",
+      "DisableAutomaticStates": true,
+      "States": [{ "Image": "actions/serverStats", "TitleAlignment": "top" }]
+    },
+    {
       "UUID": "me.amankhanna.oadiscord.uservolumecontroldial",
       "Name": "User Volume (Dial)",
       "Icon": "actions/volumeControl",

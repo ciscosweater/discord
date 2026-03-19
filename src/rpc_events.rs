@@ -2,8 +2,8 @@ use crate::actions::{
 	ChannelsResponse, GuildInfo, SoundInfo, SoundsResponse, UserVolumeControlButtonAction,
 	UserVolumeControlDialAction, VoiceChannelInfo,
 };
-use crate::client::discord_client;
 use crate::client::schedule_reconnect;
+use crate::client::{clear_authenticated_user, discord_client};
 use crate::current_settings;
 
 use discord_ipc_rust::models::receive::{
@@ -862,6 +862,7 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 		ReceivedItem::SocketClosed => {
 			log::warn!("Discord closed; attempting to reconnect");
 			clear_voice_participants().await;
+			clear_authenticated_user().await;
 			clear_pending_soundboard_requests().await;
 			clear_pending_voice_channel_requests().await;
 			schedule_reconnect();

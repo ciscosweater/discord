@@ -100,6 +100,7 @@ async fn main() -> OpenActionResult<()> {
 	register_action(PushToTalkAction).await;
 	register_action(SelectVoiceChannelAction).await;
 	register_action(LeaveVoiceChannelAction).await;
+	register_action(UserStatsAction).await;
 	register_action(UserVolumeControlButtonAction).await;
 	register_action(UserVolumeControlDialAction).await;
 	register_action(PlaySoundboardSoundAction).await;
