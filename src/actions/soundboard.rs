@@ -475,7 +475,7 @@ impl Action for PlaySoundboardSoundAction {
 		});
 
 		match client.emit_string(&payload.to_string()).await {
-			Ok(_) => instance.show_ok().await,
+			Ok(_) => Ok(()),
 			Err(e) => {
 				log::error!("Failed to play soundboard sound: {}", e);
 				instance.show_alert().await

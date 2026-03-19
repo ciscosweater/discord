@@ -20,9 +20,7 @@ async fn update_voice_channel(
 		.emit_command(&SentCommand::SelectVoiceChannel(args))
 		.await
 	{
-		Ok(_) => {
-			instance.show_ok().await?;
-		}
+		Ok(_) => {}
 		Err(e) => {
 			log::error!("Failed to select voice channel: {}", e);
 			instance.show_alert().await?;

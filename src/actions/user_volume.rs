@@ -447,7 +447,6 @@ async fn update_user_voice_setting(
 			drop(client_lock);
 			apply_local_user_voice_update(&requested_user_id, requested_volume, requested_mute)
 				.await;
-			instance.show_ok().await?;
 		}
 		Err(e) => {
 			log::error!("Failed to update user voice settings: {}", e);
