@@ -1,5 +1,7 @@
 use crate::client::discord_client;
-use crate::rpc_events::{available_soundboard_guilds, guild_request_error, soundboard_request_error, soundboard_sounds};
+use crate::rpc_events::{
+	available_soundboard_guilds, guild_request_error, soundboard_request_error, soundboard_sounds,
+};
 
 use std::collections::HashMap;
 use std::fs;
@@ -198,7 +200,11 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 		let actions_dir = plugin_actions_dir()?;
 		let generated_dir = actions_dir.join("generated");
 		if let Err(error) = fs::create_dir_all(&generated_dir) {
-			log::error!("Failed to create generated dir {}: {}", generated_dir.display(), error);
+			log::error!(
+				"Failed to create generated dir {}: {}",
+				generated_dir.display(),
+				error
+			);
 			return None;
 		}
 
@@ -211,8 +217,10 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 		if output_path.exists() {
 			return Some(image_path);
 		}
-		let temp_emoji_path =
-			generated_dir.join(format!("soundboard_{hash:016x}_emoji_{}.png", Uuid::new_v4()));
+		let temp_emoji_path = generated_dir.join(format!(
+			"soundboard_{hash:016x}_emoji_{}.png",
+			Uuid::new_v4()
+		));
 		let blank_svg_path = actions_dir.join("blank.svg");
 		let pango_markup = format!(
 			r#"<span font="Noto Color Emoji 70">{}</span>"#,
@@ -275,7 +283,10 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 
 		let _ = fs::remove_file(&temp_emoji_path);
 		if !output_path.exists() {
-			log::error!("Expected composed png not found after convert: {}", output_path.display());
+			log::error!(
+				"Expected composed png not found after convert: {}",
+				output_path.display()
+			);
 			return None;
 		}
 
@@ -285,7 +296,10 @@ fn write_soundboard_image(emoji_name: Option<&str>) -> Option<String> {
 	}
 }
 
-async fn update_soundboard_button(instance: &Instance, settings: &HashMap<String, String>) -> OpenActionResult<()> {
+async fn update_soundboard_button(
+	instance: &Instance,
+	settings: &HashMap<String, String>,
+) -> OpenActionResult<()> {
 	let emoji_name = settings.get("emoji_name").cloned();
 	let image = task::spawn_blocking(move || write_soundboard_image(emoji_name.as_deref()))
 		.await
