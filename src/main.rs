@@ -90,6 +90,8 @@ async fn main() -> OpenActionResult<()> {
 	register_action(ToggleDeafenAction).await;
 	register_action(PushToMuteAction).await;
 	register_action(PushToTalkAction).await;
+	register_action(SelectVoiceChannelAction).await;
+	register_action(LeaveVoiceChannelAction).await;
 
 	run(std::env::args().collect()).await
 }
