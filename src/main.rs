@@ -84,7 +84,7 @@ async fn main() -> OpenActionResult<()> {
 	{
 		use simplelog::*;
 		if let Err(error) = TermLogger::init(
-			LevelFilter::Debug,
+			LevelFilter::Info,
 			Config::default(),
 			TerminalMode::Stdout,
 			ColorChoice::Never,

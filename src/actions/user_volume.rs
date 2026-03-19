@@ -1,5 +1,7 @@
 use crate::client::discord_client;
-use crate::rpc_events::{current_voice_participant, current_voice_participants};
+use crate::rpc_events::{
+	current_subscribed_voice_channel, current_voice_participant, current_voice_participants,
+};
 
 use std::collections::HashMap;
 
@@ -20,6 +22,8 @@ struct UserVolumePayload {
 struct UsersResponse {
 	action: String,
 	users: Vec<crate::rpc_events::VoiceParticipant>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	error: Option<String>,
 }
 
 async fn update_user_voice_setting(
@@ -60,6 +64,7 @@ impl Action for UserVolumeControlButtonAction {
 		instance: &Instance,
 		_settings: &Self::Settings,
 	) -> OpenActionResult<()> {
+		log::info!("UserVolumeControlButton property inspector appeared");
 		send_users_response(instance).await
 	}
 
@@ -168,6 +173,7 @@ impl Action for UserVolumeControlButtonAction {
 		};
 
 		if payload.action.as_deref() == Some("get_users") {
+			log::info!("UserVolumeControlButton received get_users request from PI");
 			return send_users_response(instance).await;
 		}
 
@@ -207,6 +213,7 @@ impl Action for UserVolumeControlDialAction {
 		instance: &Instance,
 		_settings: &Self::Settings,
 	) -> OpenActionResult<()> {
+		log::info!("UserVolumeControlDial property inspector appeared");
 		send_users_response(instance).await
 	}
 
@@ -358,6 +365,7 @@ impl Action for UserVolumeControlDialAction {
 		};
 
 		if payload.action.as_deref() == Some("get_users") {
+			log::info!("UserVolumeControlDial received get_users request from PI");
 			return send_users_response(instance).await;
 		}
 
@@ -387,9 +395,27 @@ impl Action for UserVolumeControlDialAction {
 }
 
 async fn send_users_response(instance: &Instance) -> OpenActionResult<()> {
+	let client_available = discord_client().read().await.is_some();
+	let channel_id = current_subscribed_voice_channel().await;
+	let users = current_voice_participants().await;
+	let error = if !client_available {
+		Some("Discord client not initialized. Check the plugin connection settings.".to_string())
+	} else if channel_id.is_none() {
+		Some("Join a Discord voice channel to list participants.".to_string())
+	} else {
+		None
+	};
+
+	log::debug!(
+		"Sending users_result to PI: channel_id={}, users={}, error={}",
+		channel_id.as_deref().unwrap_or("<none>"),
+		users.len(),
+		error.as_deref().unwrap_or("<none>")
+	);
 	let response = UsersResponse {
 		action: "users_result".to_string(),
-		users: current_voice_participants().await,
+		users,
+		error,
 	};
 	instance
 		.send_to_property_inspector(&serde_json::to_string(&response).unwrap())

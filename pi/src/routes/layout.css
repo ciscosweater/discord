@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+html,
 body {
 	@apply bg-neutral-800 p-3;
+	color-scheme: dark;
+	min-height: 100%;
+}
+
+body {
+	@apply text-neutral-100;
+	margin: 0;
 }

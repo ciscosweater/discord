@@ -12,8 +12,9 @@ use crate::{
 use discord_ipc_rust::models::receive::{
 	ReceivedItem, commands::ReturnedCommand, events::ReturnedEvent,
 };
-use discord_ipc_rust::models::send::commands::SentCommand;
+use discord_ipc_rust::models::send::commands::{GetChannelArgs, SentCommand};
 use discord_ipc_rust::models::send::events::SubscribeableEvent;
+use discord_ipc_rust::models::shared::Channel;
 use discord_ipc_rust::models::soundboard::SoundboardSound;
 use openaction::{Action as _, ActionUuid, set_global_settings, visible_instances};
 
@@ -172,6 +173,10 @@ pub async fn current_voice_participant(user_id: &str) -> Option<VoiceParticipant
 	voice_participants().read().await.get(user_id).cloned()
 }
 
+pub async fn current_subscribed_voice_channel() -> Option<String> {
+	subscribed_voice_channel().read().await.clone()
+}
+
 pub async fn clear_voice_participants() {
 	voice_participants().write().await.clear();
 	broadcast_voice_participants().await;
@@ -215,6 +220,10 @@ async fn sync_voice_channel_subscriptions(channel_id: Option<String>) {
 	let previous = {
 		let mut subscribed = subscribed_voice_channel().write().await;
 		if *subscribed == normalized {
+			log::debug!(
+				"Voice channel subscription unchanged: {}",
+				normalized.as_deref().unwrap_or("<none>")
+			);
 			return;
 		}
 		let previous = subscribed.clone();
@@ -222,6 +231,11 @@ async fn sync_voice_channel_subscriptions(channel_id: Option<String>) {
 		previous
 	};
 
+	log::info!(
+		"Switching voice channel subscription from {} to {}",
+		previous.as_deref().unwrap_or("<none>"),
+		normalized.as_deref().unwrap_or("<none>")
+	);
 	clear_voice_participants().await;
 
 	let mut client_lock = discord_client().write().await;
@@ -266,26 +280,126 @@ async fn sync_voice_channel_subscriptions(channel_id: Option<String>) {
 	}
 }
 
+fn voice_participant_from_state(
+	voice: &discord_ipc_rust::models::receive::events::VoiceStateData,
+) -> Option<VoiceParticipant> {
+	let user = voice.user.as_ref()?;
+
+	Some(VoiceParticipant {
+		user_id: user.id.clone(),
+		name: user.username.clone(),
+		nick: if voice.nick.is_empty() {
+			None
+		} else {
+			Some(voice.nick.clone())
+		},
+		volume: voice.volume.round().clamp(0.0, 200.0) as i32,
+		mute: voice.mute,
+	})
+}
+
+async fn replace_voice_participants(
+	channel_id: &str,
+	voices: &[discord_ipc_rust::models::receive::events::VoiceStateData],
+) {
+	let participants: HashMap<String, VoiceParticipant> = voices
+		.iter()
+		.filter_map(voice_participant_from_state)
+		.map(|participant| (participant.user_id.clone(), participant))
+		.collect();
+	let count = voices.len();
+	let mapped_count = participants.len();
+
+	*voice_participants().write().await = participants;
+	log::info!(
+		"Loaded {} voice participants from snapshot for channel {} ({} voice states received)",
+		mapped_count,
+		channel_id,
+		count
+	);
+	broadcast_voice_participants().await;
+}
+
+async fn request_selected_voice_channel_snapshot() {
+	let mut client_lock = discord_client().write().await;
+	let Some(client) = client_lock.as_mut() else {
+		log::debug!("Skipping voice channel snapshot request because Discord client is unavailable");
+		return;
+	};
+
+	log::debug!("Requesting GetSelectedVoiceChannel snapshot");
+	if let Err(error) = client.emit_command(&SentCommand::GetSelectedVoiceChannel).await {
+		log::warn!("Failed to request current voice channel snapshot: {}", error);
+	}
+}
+
+async fn request_channel_details(channel_id: &str) {
+	let mut client_lock = discord_client().write().await;
+	let Some(client) = client_lock.as_mut() else {
+		log::debug!(
+			"Skipping GetChannel fallback for {} because Discord client is unavailable",
+			channel_id
+		);
+		return;
+	};
+
+	log::debug!("Requesting GetChannel fallback for {}", channel_id);
+	if let Err(error) = client
+		.emit_command(&SentCommand::GetChannel(GetChannelArgs {
+			channel_id: channel_id.to_string(),
+		}))
+		.await
+	{
+		log::warn!("Failed to request channel details for {}: {}", channel_id, error);
+	}
+}
+
+async fn handle_selected_voice_channel(channel: Option<Channel>) {
+	let channel_id = channel.as_ref().map(|channel| channel.id.clone());
+	sync_voice_channel_subscriptions(channel_id).await;
+
+	match channel {
+		Some(channel) => {
+			let voice_states_present = channel.voice_states.is_some();
+			let snapshot = channel.voice_states.unwrap_or_default();
+			log::info!(
+				"Received selected voice channel {} snapshot: voice_states_present={}, participants={}",
+				channel.id,
+				voice_states_present,
+				snapshot.len()
+			);
+			replace_voice_participants(&channel.id, &snapshot).await;
+			if snapshot.is_empty() {
+				log::warn!(
+					"Selected voice channel {} returned empty voice_states snapshot; requesting GetChannel fallback",
+					channel.id
+				);
+				request_channel_details(&channel.id).await;
+			}
+		}
+		None => {
+			log::info!("Discord reports no selected voice channel");
+		}
+	}
+}
+
 async fn upsert_voice_participant(
 	voice: discord_ipc_rust::models::receive::events::VoiceStateData,
 ) {
-	let Some(user) = voice.user else {
+	let Some(participant) = voice_participant_from_state(&voice) else {
+		log::debug!("Ignoring voice state update without user payload");
 		return;
 	};
 
 	voice_participants().write().await.insert(
-		user.id.clone(),
-		VoiceParticipant {
-			user_id: user.id,
-			name: user.username,
-			nick: if voice.nick.is_empty() {
-				None
-			} else {
-				Some(voice.nick)
-			},
-			volume: voice.volume.round().clamp(0.0, 200.0) as i32,
-			mute: voice.mute,
-		},
+		participant.user_id.clone(),
+		participant.clone(),
+	);
+	log::debug!(
+		"Updated voice participant {} (mute={}, volume={})",
+		participant.user_id,
+		participant.mute,
+		participant.volume
 	);
 	broadcast_voice_participants().await;
 }
@@ -294,10 +408,12 @@ async fn remove_voice_participant(
 	voice: discord_ipc_rust::models::receive::events::VoiceStateData,
 ) {
 	let Some(user) = voice.user else {
+		log::debug!("Ignoring voice state delete without user payload");
 		return;
 	};
 
 	voice_participants().write().await.remove(&user.id);
+	log::debug!("Removed voice participant {}", user.id);
 	broadcast_voice_participants().await;
 }
 
@@ -349,7 +465,18 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				apply_voice_state(voice.mute, voice.deaf).await
 			}
 			ReturnedEvent::VoiceChannelSelect(data) => {
-				sync_voice_channel_subscriptions(data.channel_id).await;
+				let channel_id = data.channel_id.clone();
+				log::info!(
+					"VOICE_CHANNEL_SELECT received: channel_id={}, guild_id={}",
+					channel_id.as_deref().unwrap_or("<none>"),
+					data.guild_id.as_deref().unwrap_or("<none>")
+				);
+				sync_voice_channel_subscriptions(channel_id.clone()).await;
+				if channel_id.is_some() {
+					request_selected_voice_channel_snapshot().await;
+				} else {
+					log::info!("Voice channel deselected");
+				}
 			}
 			ReturnedEvent::VoiceStateCreate(voice) | ReturnedEvent::VoiceStateUpdate(voice) => {
 				upsert_voice_participant(voice).await;
@@ -368,7 +495,27 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 				apply_voice_state(voice.mute, voice.deaf).await;
 			}
 			ReturnedCommand::GetSelectedVoiceChannel(channel) => {
-				sync_voice_channel_subscriptions(channel.map(|channel| channel.id)).await;
+				handle_selected_voice_channel(channel).await;
+			}
+			ReturnedCommand::GetChannel(channel) => {
+				let current_channel = current_subscribed_voice_channel().await;
+				log::info!(
+					"Received GetChannel response: channel_id={}, current_subscription={}, voice_states_present={}, participants={}",
+					channel.id,
+					current_channel.as_deref().unwrap_or("<none>"),
+					channel.voice_states.is_some(),
+					channel.voice_states.as_ref().map(|states| states.len()).unwrap_or(0)
+				);
+				if current_channel.as_deref() == Some(channel.id.as_str()) {
+					let snapshot = channel.voice_states.unwrap_or_default();
+					replace_voice_participants(&channel.id, &snapshot).await;
+				} else {
+					log::debug!(
+						"Ignoring GetChannel response for {} because current subscription is {}",
+						channel.id,
+						current_channel.as_deref().unwrap_or("<none>")
+					);
+				}
 			}
 			ReturnedCommand::GetGuilds(data) => {
 				let mut guilds: Vec<GuildInfo> = data
