@@ -140,6 +140,44 @@ pub struct VoiceParticipant {
 	pub nick: Option<String>,
 	pub volume: i32,
 	pub mute: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub avatar_hash: Option<String>,
+	#[serde(skip_serializing)]
+	pub local_mute: bool,
+	#[serde(skip_serializing)]
+	pub server_mute: bool,
+	#[serde(skip_serializing)]
+	pub self_mute: bool,
+	#[serde(skip_serializing)]
+	pub server_deaf: bool,
+	#[serde(skip_serializing)]
+	pub self_deaf: bool,
+	#[serde(skip_serializing)]
+	pub suppress: bool,
+}
+
+impl VoiceParticipant {
+	pub fn compute_effective_mute(
+		local_mute: bool,
+		server_mute: bool,
+		self_mute: bool,
+		server_deaf: bool,
+		self_deaf: bool,
+		suppress: bool,
+	) -> bool {
+		local_mute || server_mute || self_mute || server_deaf || self_deaf || suppress
+	}
+
+	fn refresh_effective_mute(&mut self) {
+		self.mute = Self::compute_effective_mute(
+			self.local_mute,
+			self.server_mute,
+			self.self_mute,
+			self.server_deaf,
+			self.self_deaf,
+			self.suppress,
+		);
+	}
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -173,6 +211,24 @@ pub async fn current_voice_participant(user_id: &str) -> Option<VoiceParticipant
 	voice_participants().read().await.get(user_id).cloned()
 }
 
+pub async fn apply_local_user_voice_update(user_id: &str, volume: Option<i32>, mute: Option<bool>) {
+	let mut participants = voice_participants().write().await;
+	let Some(participant) = participants.get_mut(user_id) else {
+		return;
+	};
+
+	if let Some(volume) = volume {
+		participant.volume = volume.clamp(0, 200);
+	}
+	if let Some(mute) = mute {
+		participant.local_mute = mute;
+		participant.refresh_effective_mute();
+	}
+	drop(participants);
+
+	broadcast_voice_participants().await;
+}
+
 pub async fn current_subscribed_voice_channel() -> Option<String> {
 	subscribed_voice_channel().read().await.clone()
 }
@@ -183,9 +239,10 @@ pub async fn clear_voice_participants() {
 }
 
 async fn broadcast_voice_participants() {
+	let users = current_voice_participants().await;
 	let payload = match serde_json::to_string(&VoiceParticipantsResponse {
 		action: "users_result".to_string(),
-		users: current_voice_participants().await,
+		users,
 	}) {
 		Ok(payload) => payload,
 		Err(error) => {
@@ -205,6 +262,8 @@ async fn broadcast_voice_participants() {
 			log::error!("Failed to forward users to dial PI: {}", error);
 		}
 	}
+
+	crate::actions::refresh_user_volume_instances().await;
 }
 
 async fn sync_voice_channel_subscriptions(channel_id: Option<String>) {
@@ -294,7 +353,21 @@ fn voice_participant_from_state(
 			Some(voice.nick.clone())
 		},
 		volume: voice.volume.round().clamp(0.0, 200.0) as i32,
-		mute: voice.mute,
+		mute: VoiceParticipant::compute_effective_mute(
+			voice.mute,
+			voice.state.mute,
+			voice.state.self_mute,
+			voice.state.deaf,
+			voice.state.self_deaf,
+			voice.state.suppress,
+		),
+		avatar_hash: user.avatar.clone(),
+		local_mute: voice.mute,
+		server_mute: voice.state.mute,
+		self_mute: voice.state.self_mute,
+		server_deaf: voice.state.deaf,
+		self_deaf: voice.state.self_deaf,
+		suppress: voice.state.suppress,
 	})
 }
 
@@ -323,13 +396,21 @@ async fn replace_voice_participants(
 async fn request_selected_voice_channel_snapshot() {
 	let mut client_lock = discord_client().write().await;
 	let Some(client) = client_lock.as_mut() else {
-		log::debug!("Skipping voice channel snapshot request because Discord client is unavailable");
+		log::debug!(
+			"Skipping voice channel snapshot request because Discord client is unavailable"
+		);
 		return;
 	};
 
 	log::debug!("Requesting GetSelectedVoiceChannel snapshot");
-	if let Err(error) = client.emit_command(&SentCommand::GetSelectedVoiceChannel).await {
-		log::warn!("Failed to request current voice channel snapshot: {}", error);
+	if let Err(error) = client
+		.emit_command(&SentCommand::GetSelectedVoiceChannel)
+		.await
+	{
+		log::warn!(
+			"Failed to request current voice channel snapshot: {}",
+			error
+		);
 	}
 }
 
@@ -350,7 +431,11 @@ async fn request_channel_details(channel_id: &str) {
 		}))
 		.await
 	{
-		log::warn!("Failed to request channel details for {}: {}", channel_id, error);
+		log::warn!(
+			"Failed to request channel details for {}: {}",
+			channel_id,
+			error
+		);
 	}
 }
 
@@ -391,10 +476,10 @@ async fn upsert_voice_participant(
 		return;
 	};
 
-	voice_participants().write().await.insert(
-		participant.user_id.clone(),
-		participant.clone(),
-	);
+	voice_participants()
+		.write()
+		.await
+		.insert(participant.user_id.clone(), participant.clone());
 	log::debug!(
 		"Updated voice participant {} (mute={}, volume={})",
 		participant.user_id,
@@ -504,7 +589,11 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 					channel.id,
 					current_channel.as_deref().unwrap_or("<none>"),
 					channel.voice_states.is_some(),
-					channel.voice_states.as_ref().map(|states| states.len()).unwrap_or(0)
+					channel
+						.voice_states
+						.as_ref()
+						.map(|states| states.len())
+						.unwrap_or(0)
 				);
 				if current_channel.as_deref() == Some(channel.id.as_str()) {
 					let snapshot = channel.voice_states.unwrap_or_default();
@@ -526,7 +615,9 @@ pub async fn handle_rpc_event(item: ReceivedItem) {
 						name: guild.name,
 					})
 					.collect();
-				guilds.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+				guilds.sort_by(|left, right| {
+					left.name.to_lowercase().cmp(&right.name.to_lowercase())
+				});
 				guilds.insert(
 					0,
 					GuildInfo {
@@ -563,6 +654,34 @@ async fn update_action_state(action_uuid: ActionUuid, active: bool) {
 	for instance in visible_instances(action_uuid).await {
 		if let Err(e) = instance.set_state(state).await {
 			log::error!("Failed to update state for {}: {}", action_uuid, e);
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::VoiceParticipant;
+
+	#[test]
+	fn effective_mute_is_false_when_all_flags_are_false() {
+		assert!(!VoiceParticipant::compute_effective_mute(
+			false, false, false, false, false, false
+		));
+	}
+
+	#[test]
+	fn effective_mute_is_true_when_any_flag_is_true() {
+		for flags in [
+			(true, false, false, false, false, false),
+			(false, true, false, false, false, false),
+			(false, false, true, false, false, false),
+			(false, false, false, true, false, false),
+			(false, false, false, false, true, false),
+			(false, false, false, false, false, true),
+		] {
+			assert!(VoiceParticipant::compute_effective_mute(
+				flags.0, flags.1, flags.2, flags.3, flags.4, flags.5
+			));
 		}
 	}
 }
