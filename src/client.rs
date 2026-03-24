@@ -257,3 +257,13 @@ async fn create_discord_client(settings: &DiscordSettings) -> Result<DiscordIpcC
 		Ok(rpc)
 	}
 }
+
+pub async fn request_voice_settings() {
+	let mut client_lock = discord_client().write().await;
+	if let Some(client) = client_lock.as_mut() {
+		log::debug!("Requesting GetVoiceSettings from helper");
+		if let Err(error) = client.emit_command(&SentCommand::GetVoiceSettings).await {
+			log::warn!("Failed to request voice settings: {}", error);
+		}
+	}
+}

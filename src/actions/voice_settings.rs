@@ -62,6 +62,15 @@ impl Action for ToggleMuteAction {
 		)
 		.await
 	}
+
+	async fn will_appear(
+		&self,
+		_instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		crate::client::request_voice_settings().await;
+		Ok(())
+	}
 }
 
 pub struct ToggleDeafenAction;
@@ -87,6 +96,15 @@ impl Action for ToggleDeafenAction {
 			if new_deaf { 1 } else { 0 },
 		)
 		.await
+	}
+
+	async fn will_appear(
+		&self,
+		_instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		crate::client::request_voice_settings().await;
+		Ok(())
 	}
 }
 
@@ -127,6 +145,15 @@ impl Action for PushToMuteAction {
 		)
 		.await
 	}
+
+	async fn will_appear(
+		&self,
+		_instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		crate::client::request_voice_settings().await;
+		Ok(())
+	}
 }
 
 pub struct PushToTalkAction;
@@ -165,5 +192,14 @@ impl Action for PushToTalkAction {
 			0,
 		)
 		.await
+	}
+
+	async fn will_appear(
+		&self,
+		_instance: &Instance,
+		_settings: &Self::Settings,
+	) -> OpenActionResult<()> {
+		crate::client::request_voice_settings().await;
+		Ok(())
 	}
 }
