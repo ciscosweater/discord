@@ -59,6 +59,17 @@ pub async fn update_error(error: &str) {
 	}
 }
 
+async fn clear_stored_access_token() {
+	let mut current = current_settings().write().await;
+	if current.access_token.is_empty() {
+		return;
+	}
+	current.access_token.clear();
+	if let Err(e) = set_global_settings(&*current).await {
+		log::error!("Failed to clear invalid access token: {}", e);
+	}
+}
+
 // Flag to avoid multiple concurrent reconnect attempts.
 fn reconnecting_flag() -> &'static AtomicBool {
 	static RECONNECTING: OnceLock<AtomicBool> = OnceLock::new();
@@ -179,7 +190,11 @@ async fn create_discord_client(settings: &DiscordSettings) -> Result<DiscordIpcC
 	.await;
 
 	if !settings.access_token.is_empty() {
-		setup_discord_client(&mut rpc, settings.access_token.clone()).await?;
+		if let Err(error) = setup_discord_client(&mut rpc, settings.access_token.clone()).await {
+			log::warn!("Stored access token rejected, clearing it: {}", error);
+			clear_stored_access_token().await;
+			return Err(error);
+		}
 
 		Ok(rpc)
 	} else {

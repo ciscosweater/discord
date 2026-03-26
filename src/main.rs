@@ -45,8 +45,33 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
 		&self,
 		event: global_events::DidReceiveGlobalSettingsEvent,
 	) -> OpenActionResult<()> {
-		let settings: DiscordSettings =
-			serde_json::from_value(event.payload.settings).unwrap_or_default();
+		let raw_settings = event.payload.settings;
+		let partial_settings: DiscordSettings =
+			serde_json::from_value(raw_settings.clone()).unwrap_or_default();
+		let current = current_settings().read().await.clone();
+		let settings = DiscordSettings {
+			client_id: raw_settings
+				.get("clientId")
+				.and_then(|value| value.as_str())
+				.map(str::to_owned)
+				.unwrap_or_else(|| current.client_id.clone()),
+			client_secret: raw_settings
+				.get("clientSecret")
+				.and_then(|value| value.as_str())
+				.map(str::to_owned)
+				.unwrap_or_else(|| current.client_secret.clone()),
+			access_token: raw_settings
+				.get("accessToken")
+				.and_then(|value| value.as_str())
+				.map(str::to_owned)
+				.unwrap_or_else(|| current.access_token.clone()),
+			error: raw_settings
+				.get("error")
+				.and_then(|value| value.as_str())
+				.map(str::to_owned)
+				.or_else(|| partial_settings.error.clone())
+				.or_else(|| current.error.clone()),
+		};
 
 		log::info!(
 			"did_receive_global_settings: client_id present={} client_secret present={} access_token present={}",
@@ -56,11 +81,9 @@ impl global_events::GlobalEventHandler for GlobalEventHandler {
 		);
 
 		// Only react when the stored settings actually changed so we can avoid reconnect churn.
-		let current = current_settings().read().await;
 		let settings_changed = current.client_id != settings.client_id
 			|| current.client_secret != settings.client_secret
 			|| current.access_token != settings.access_token;
-		drop(current);
 
 		log::info!("settings_changed={}", settings_changed);
 
