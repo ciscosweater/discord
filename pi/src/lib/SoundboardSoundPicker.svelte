@@ -111,11 +111,11 @@
 		} else if (soundRefreshToken !== appliedRefreshToken) {
 			appliedRefreshToken = soundRefreshToken;
 			requestedGuildId = "";
-			void requestSounds();
+			void requestSounds(true);
 		}
 	}
 
-	async function requestSounds() {
+	async function requestSounds(forceRefresh = false) {
 		const normalizedGuildId = guildId.trim();
 		if (!normalizedGuildId) {
 			error = "Enter a server ID to see available sounds";
@@ -132,6 +132,7 @@
 		sendToPlugin({
 			action: "get_sounds",
 			guild_id: normalizedGuildId,
+			force_refresh: forceRefresh,
 		});
 		window.setTimeout(() => {
 			if (requestToken === soundRequestToken && loading) {
@@ -156,7 +157,7 @@
 
 	function handleRefresh() {
 		requestedGuildId = "";
-		void requestSounds();
+		void requestSounds(true);
 	}
 </script>
 

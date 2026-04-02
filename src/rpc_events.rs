@@ -25,6 +25,10 @@ pub fn soundboard_sounds() -> &'static RwLock<HashMap<String, Vec<SoundboardSoun
 	SOUNDS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+pub async fn clear_soundboard_sounds_for_guild(guild_id: &str) {
+	soundboard_sounds().write().await.remove(guild_id);
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingSoundboardRequest {
 	pub instance_id: String,

@@ -1,7 +1,7 @@
 use crate::client::discord_client;
 use crate::rpc_events::{
-	available_soundboard_guilds, guild_request_error, register_pending_soundboard_request,
-	soundboard_request_error, soundboard_sounds,
+	available_soundboard_guilds, clear_soundboard_sounds_for_guild, guild_request_error,
+	register_pending_soundboard_request, soundboard_request_error, soundboard_sounds,
 };
 
 use std::collections::HashMap;
@@ -24,6 +24,7 @@ struct SoundboardPayload {
 	action: Option<String>,
 	sound_id: Option<String>,
 	guild_id: Option<String>,
+	force_refresh: Option<bool>,
 	sound_name: Option<String>,
 	emoji_name: Option<String>,
 	show_sound_title: Option<bool>,
@@ -527,21 +528,26 @@ impl Action for PlaySoundboardSoundAction {
 						return Ok(());
 					}
 				};
+				let force_refresh = payload.force_refresh.unwrap_or(false);
 
-				let sounds_map = soundboard_sounds().read().await;
-				if let Some(cached_sounds) = sounds_map.get(&guild_id) {
-					let sounds = cached_sounds
-						.iter()
-						.map(|sound| SoundInfo {
-							sound_id: sound.sound_id.clone(),
-							name: sound.name.clone(),
-							emoji_name: sound.emoji_name.clone(),
-						})
-						.collect();
-					send_sounds_response(instance, &guild_id, sounds, None).await?;
-					return Ok(());
+				if !force_refresh {
+					let sounds_map = soundboard_sounds().read().await;
+					if let Some(cached_sounds) = sounds_map.get(&guild_id) {
+						let sounds = cached_sounds
+							.iter()
+							.map(|sound| SoundInfo {
+								sound_id: sound.sound_id.clone(),
+								name: sound.name.clone(),
+								emoji_name: sound.emoji_name.clone(),
+							})
+							.collect();
+						send_sounds_response(instance, &guild_id, sounds, None).await?;
+						return Ok(());
+					}
+					drop(sounds_map);
 				}
-				drop(sounds_map);
+
+				clear_soundboard_sounds_for_guild(&guild_id).await;
 
 				if let Some(error) = soundboard_request_error().read().await.clone() {
 					send_sounds_response(instance, &guild_id, vec![], Some(error)).await?;
